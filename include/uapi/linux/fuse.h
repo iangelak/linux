@@ -221,6 +221,18 @@
 /** The node ID of the root inode */
 #define FUSE_ROOT_ID 1
 
+#define FUSE_FSNOTIFY_MODIFY 0x00000002
+#define FUSE_FSNOTIFY_ATTRIB 0x00000004
+#define FUSE_FSNOTIFY_MOVED_FROM 0x00000040
+#define FUSE_FSNOTIFY_MOVED_TO 0x00000080
+#define FUSE_FSNOTIFY_CREATE 0x00000100
+#define FUSE_FSNOTIFY_DELETE 0x00000200
+#define FUSE_FSNOTIFY_DELETE_SELF 0x00000400
+#define FUSE_FSNOTIFY_MOVE_SELF 0x00000800
+#define FUSE_FSNOTIFY_ISDIR 0x40000000
+
+#define FUSE_FSNOTIFY_SUPPORTED ( FUSE_FSNOTIFY_MODIFY | FUSE_FSNOTIFY_ATTRIB | FUSE_FSNOTIFY_MOVED_FROM | FUSE_FSNOTIFY_MOVED_TO | FUSE_FSNOTIFY_CREATE | FUSE_FSNOTIFY_DELETE | FUSE_FSNOTIFY_DELETE_SELF | FUSE_FSNOTIFY_MOVE_SELF)
+
 /* Make sure all structures are padded to 64bit boundary, so 32bit
    userspace works under 64bit kernels */
 
@@ -509,6 +521,7 @@ enum fuse_opcode {
 	FUSE_COPY_FILE_RANGE	= 47,
 	FUSE_SETUPMAPPING	= 48,
 	FUSE_REMOVEMAPPING	= 49,
+	FUSE_FSNOTIFY           = 50,
 
 	/* CUSE specific operations */
 	CUSE_INIT		= 4096,
@@ -525,8 +538,11 @@ enum fuse_notify_code {
 	FUSE_NOTIFY_STORE = 4,
 	FUSE_NOTIFY_RETRIEVE = 5,
 	FUSE_NOTIFY_DELETE = 6,
+	FUSE_NOTIFY_LOCK = 7,
+	FUSE_FSNOTIFY = 8,
 	FUSE_NOTIFY_CODE_MAX,
 };
+
 
 /* The read buffer is required to be at least 8k, but may be much larger */
 #define FUSE_MIN_READ_BUFFER 8192
@@ -734,6 +750,13 @@ struct fuse_init_in {
 	uint32_t	flags;
 };
 
+struct fuse_notify_fsnotify_out {
+	uint64_t parent;
+	uint64_t mask;
+	uint64_t namelen;
+	uint32_t padding;
+};
+
 #define FUSE_COMPAT_INIT_OUT_SIZE 8
 #define FUSE_COMPAT_22_INIT_OUT_SIZE 24
 
@@ -842,6 +865,12 @@ struct fuse_in_header {
 	uint32_t	padding;
 };
 
+struct fuse_fsnotify_in {
+	uint64_t mask;
+	uint32_t action;
+	uint32_t padding;
+};
+
 struct fuse_out_header {
 	uint32_t	len;
 	int32_t		error;
@@ -914,6 +943,12 @@ struct fuse_notify_retrieve_in {
 	uint32_t	dummy2;
 	uint64_t	dummy3;
 	uint64_t	dummy4;
+};
+
+struct fuse_notify_lock_out {
+	uint64_t	unique;
+	int32_t		error;
+	int32_t		padding;
 };
 
 /* Device ioctls: */
