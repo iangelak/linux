@@ -459,7 +459,7 @@ static void fsnotify_iter_next(struct fsnotify_iter_info *iter_info)
  *		if both are non-NULL event may be reported to both.
  * @cookie:	inotify rename cookie
  */
-int fsnotify(__u32 mask, const void *data, int data_type, struct inode *dir,
+int __fsnotify(__u32 mask, const void *data, int data_type, struct inode *dir,
 	     const struct qstr *file_name, struct inode *inode, u32 cookie)
 {
 	const struct path *path = fsnotify_data_path(data, data_type);
@@ -469,6 +469,7 @@ int fsnotify(__u32 mask, const void *data, int data_type, struct inode *dir,
 	struct inode *parent = NULL;
 	int ret = 0;
 	__u32 test_mask, marks_mask;
+	
 
 	if (path)
 		mnt = real_mount(path->mnt);
@@ -552,13 +553,45 @@ out:
 
 	return ret;
 }
+/*
+ * Wrapper around fsnotify. The main functionality is to filter events in
+ * case the inode belongs to a filesystem that supports remote events
+ */
+int fsnotify(__u32 mask, const void *data, int data_type, struct inode *dir,
+	     const struct qstr *file_name, struct inode *inode, u32 cookie)
+{
+	int i_ret = 1, d_ret = 1;
+
+	if ((inode != NULL)) {
+		if (inode->i_op->fsnotify_remote) {
+			i_ret = inode->i_op->fsnotify_remote(inode, &mask);
+			/* We need to suppress the event so just return */
+			if (i_ret) {
+				return 0;
+			}
+		}
+	}
+
+	if ((dir != NULL)) {
+		if (dir->i_op->fsnotify_remote) {
+			d_ret = dir->i_op->fsnotify_remote(dir, &mask);
+			/* We need to suppress the event so just return */
+			if (d_ret) {
+				return 0;
+			}
+		}
+	}
+
+	return __fsnotify(mask, data, data_type, dir, file_name, inode, cookie);
+}
+
 EXPORT_SYMBOL_GPL(fsnotify);
 
 static __init int fsnotify_init(void)
 {
 	int ret;
 
-	BUILD_BUG_ON(HWEIGHT32(ALL_FSNOTIFY_BITS) != 25);
+	BUILD_BUG_ON(HWEIGHT32(ALL_FSNOTIFY_BITS) != 26);
 
 	ret = init_srcu_struct(&fsnotify_mark_srcu);
 	if (ret)

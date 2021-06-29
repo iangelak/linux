@@ -77,6 +77,7 @@
 #include "fsnotify.h"
 
 #define FSNOTIFY_REAPER_DELAY	(1)	/* 1 jiffy */
+#define FSNOTIFY_DELETE_REMOTE_MARK 0   /* Delete a mark in remote fsnotify */
 
 struct srcu_struct fsnotify_mark_srcu;
 struct kmem_cache *fsnotify_mark_connector_cachep;
@@ -130,6 +131,7 @@ static void __fsnotify_recalc_mask(struct fsnotify_mark_connector *conn)
 			new_mask |= mark->mask;
 	}
 	*fsnotify_conn_mask_p(conn) = new_mask;
+	
 }
 
 /*
@@ -375,6 +377,7 @@ void fsnotify_finish_user_wait(struct fsnotify_iter_info *iter_info)
 void fsnotify_detach_mark(struct fsnotify_mark *mark)
 {
 	struct fsnotify_group *group = mark->group;
+	struct inode *inode = NULL;
 
 	WARN_ON_ONCE(!mutex_is_locked(&group->mark_mutex));
 	WARN_ON_ONCE(!srcu_read_lock_held(&fsnotify_mark_srcu) &&
@@ -387,6 +390,14 @@ void fsnotify_detach_mark(struct fsnotify_mark *mark)
 		spin_unlock(&mark->lock);
 		return;
 	}
+
+	/* Only if the object is an inode try to send a request to FUSE */
+	inode = igrab(fsnotify_conn_inode(mark->connector));
+	if (inode && inode->i_op->fsnotify_update) {
+		inode->i_op->fsnotify_update(inode, FSNOTIFY_DELETE_REMOTE_MARK,
+					     (uint64_t)group, mark->mask);
+	}
+
 	mark->flags &= ~FSNOTIFY_MARK_FLAG_ATTACHED;
 	list_del_init(&mark->g_list);
 	spin_unlock(&mark->lock);
@@ -652,15 +663,15 @@ int fsnotify_add_mark_locked(struct fsnotify_mark *mark,
 	 */
 	spin_lock(&mark->lock);
 	mark->flags |= FSNOTIFY_MARK_FLAG_ALIVE | FSNOTIFY_MARK_FLAG_ATTACHED;
-
 	list_add(&mark->g_list, &group->marks_list);
 	fsnotify_get_mark(mark); /* for g_list */
 	spin_unlock(&mark->lock);
+	
 
 	ret = fsnotify_add_mark_list(mark, connp, type, allow_dups, fsid);
 	if (ret)
 		goto err;
-
+	
 	if (mark->mask)
 		fsnotify_recalc_mask(mark->connector);
 

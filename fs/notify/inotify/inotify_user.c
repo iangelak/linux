@@ -591,7 +591,8 @@ static int inotify_new_watch(struct fsnotify_group *group,
 		ret = -ENOSPC;
 		goto out_err;
 	}
-
+	
+	printk(KERN_INFO "Adding a new inode watch\n");
 	/* we are on the idr, now get on the inode */
 	ret = fsnotify_add_inode_mark_locked(&tmp_i_mark->fsn_mark, inode, 0);
 	if (ret) {
@@ -747,18 +748,25 @@ SYSCALL_DEFINE3(inotify_add_watch, int, fd, const char __user *, pathname,
 		flags |= LOOKUP_FOLLOW;
 	if (mask & IN_ONLYDIR)
 		flags |= LOOKUP_DIRECTORY;
-
+	
 	ret = inotify_find_inode(pathname, &path, flags,
 			(mask & IN_ALL_EVENTS));
 	if (ret)
 		goto fput_and_out;
-
+	
 	/* inode held in place by reference to path; group by fget on fd */
 	inode = path.dentry->d_inode;
 	group = f.file->private_data;
 
 	/* create/update an inode mark */
 	ret = inotify_update_watch(group, inode, mask);
+	/*
+	 * If the inode belongs to a remote filesystem/server that supports
+	 * remote fsnotify events then send the mark to the remote server
+	 */
+	if (ret >= 0 && inode->i_op->fsnotify_update) {
+		inode->i_op->fsnotify_update(inode, 1, (uint64_t)group, mask);
+	}
 	path_put(&path);
 fput_and_out:
 	fdput(f);

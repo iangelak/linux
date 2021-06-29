@@ -648,6 +648,9 @@ struct fuse_conn {
 	 */
 	unsigned handle_killpriv_v2:1;
 
+	/** Is fsnotify supported by fs? */
+	unsigned no_fsnotify:1;
+
 	/*
 	 * The following bitfields are only for optimization purposes
 	 * and hence races in setting them will not cause malfunction
@@ -1214,6 +1217,8 @@ struct posix_acl *fuse_get_acl(struct inode *inode, int type);
 int fuse_set_acl(struct user_namespace *mnt_userns, struct inode *inode,
 		 struct posix_acl *acl, int type);
 
+int fuse_fsnotify_send_request(struct inode *inode, uint32_t mask,
+			       uint32_t action, uint64_t group);
 /* readdir.c */
 int fuse_readdir(struct file *file, struct dir_context *ctx);
 

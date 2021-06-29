@@ -17,6 +17,7 @@
 #include <linux/xattr.h>
 #include <linux/iversion.h>
 #include <linux/posix_acl.h>
+#include <linux/fsnotify_backend.h>
 
 static void fuse_advise_use_readdirplus(struct inode *dir)
 {
@@ -1849,6 +1850,62 @@ static int fuse_getattr(struct user_namespace *mnt_userns,
 	return fuse_update_get_attr(inode, NULL, stat, request_mask, flags);
 }
 
+static int fuse_fsnotify_update_mark(struct inode *inode, uint32_t action,
+				     uint64_t group, uint32_t mask)
+{
+	int ret = 0;
+
+	/*
+	 * We have to remove the bits added to the mask before being attached
+	 * or detached to the inode, since these bits are going to be
+	 * added by the remote host kernel. If these bits were still enabled
+	 * in the mask that was sent to the remote kernel then the watch would
+	 * be rejected as an unsupported value.
+	 */
+	mask = mask & ~(FS_IN_IGNORED | FS_UNMOUNT | FS_IN_ONESHOT | \
+			FS_EXCL_UNLINK | FS_EVENT_ON_CHILD);
+
+	if (!(mask & FUSE_FSNOTIFY_SUPPORTED)) {
+		return EINVAL;
+	}
+
+	/*
+	 * Action 0: Remove a watch
+	 * Action 1: Add/Modify watch
+	 */
+	printk(KERN_INFO "Sending FSNOTIFY to virtiofs action: %d mask: %d group %p\n", action, mask, group);
+	pr_debug("Sending FSNOTIFY to virtiofs action: %d mask: %d group %p\n",
+		 action, mask, group);
+
+	ret = fuse_fsnotify_send_request(inode, mask, action, group);
+
+	return ret;
+}
+
+static int fuse_fsnotify_remote(struct inode *inode, uint32_t *mask)
+{
+	struct fuse_mount *fm = get_fuse_mount(inode);
+	
+	/*
+	 * The mask has the remote events bit enabled but fuse does
+	 * not support remote events, thus suppress the event
+	 */
+	if ((*mask & FS_FSNOTIFY_REMOTE) && (fm->fc->no_fsnotify)) {
+		*mask &= ~FS_FSNOTIFY_REMOTE;
+		return EINVAL;
+	/* Local event when remote events are not supported. Don't suppress */
+	} else if (!(*mask & FS_FSNOTIFY_REMOTE) && (fm->fc->no_fsnotify)) {
+		return 0;
+	/* Remote event when remote events are supported. Don't suppress */
+	} else if ((*mask & FS_FSNOTIFY_REMOTE) && !(fm->fc->no_fsnotify)) {
+		*mask &= ~FS_FSNOTIFY_REMOTE;
+		return 0;
+	/* Local event when remote events are supported. Suppress */
+	} else {
+		return EINVAL;
+	}
+}
+
 static const struct inode_operations fuse_dir_inode_operations = {
 	.lookup		= fuse_lookup,
 	.mkdir		= fuse_mkdir,
@@ -1868,6 +1925,8 @@ static const struct inode_operations fuse_dir_inode_operations = {
 	.set_acl	= fuse_set_acl,
 	.fileattr_get	= fuse_fileattr_get,
 	.fileattr_set	= fuse_fileattr_set,
+	.fsnotify_update = fuse_fsnotify_update_mark,
+	.fsnotify_remote = fuse_fsnotify_remote,
 };
 
 static const struct file_operations fuse_dir_operations = {
@@ -1890,6 +1949,8 @@ static const struct inode_operations fuse_common_inode_operations = {
 	.set_acl	= fuse_set_acl,
 	.fileattr_get	= fuse_fileattr_get,
 	.fileattr_set	= fuse_fileattr_set,
+	.fsnotify_update = fuse_fsnotify_update_mark,
+	.fsnotify_remote = fuse_fsnotify_remote,
 };
 
 static const struct inode_operations fuse_symlink_inode_operations = {
@@ -1897,6 +1958,8 @@ static const struct inode_operations fuse_symlink_inode_operations = {
 	.get_link	= fuse_get_link,
 	.getattr	= fuse_getattr,
 	.listxattr	= fuse_listxattr,
+	.fsnotify_update = fuse_fsnotify_update_mark,
+	.fsnotify_remote = fuse_fsnotify_remote,
 };
 
 void fuse_init_common(struct inode *inode)

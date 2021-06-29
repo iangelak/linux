@@ -21,6 +21,7 @@
 #include <linux/swap.h>
 #include <linux/splice.h>
 #include <linux/sched.h>
+#include <linux/fsnotify_backend.h>
 
 MODULE_ALIAS_MISCDEV(FUSE_MINOR);
 MODULE_ALIAS("devname:fuse");
@@ -1784,6 +1785,49 @@ static int fuse_notify(struct fuse_conn *fc, enum fuse_notify_code code,
 		return -EINVAL;
 	}
 }
+
+static void fuse_fsnotify_end_request(struct fuse_mount *fm, struct fuse_args *args,
+				int error)
+{
+}
+
+/* Send a request for a watch placement to the FUSE server */
+int fuse_fsnotify_send_request(struct inode *inode, uint32_t mask,
+			uint32_t action, uint64_t group)
+{
+	struct fuse_mount *fm = get_fuse_mount(inode);
+	struct fuse_notify_fsnotify_in inarg;
+	FUSE_ARGS(args);
+	int err;
+
+	/* The server does not support remote fsnotify events */
+	if (fm->fc->no_fsnotify)
+		return 0;
+
+	/*
+	 * Send the mask the action (remove, add, modify) and the
+	 * unique identifier that is the fsnotify group that is
+	 * interested in the watch to the FUSE server
+	 */
+	memset(&inarg, 0, sizeof(struct fuse_notify_fsnotify_in));
+	inarg.mask = mask;
+	inarg.action = action;
+	inarg.group = (uint64_t)group;
+
+	args.opcode = FUSE_FSNOTIFY;
+	args.nodeid = get_node_id(inode);
+	args.in_numargs = 1;
+	args.in_args[0].size = sizeof(struct fuse_notify_fsnotify_in);
+	args.in_args[0].value = &inarg;
+	args.out_numargs = 0;
+	args.end = fuse_fsnotify_end_request;
+	args.force = true;
+
+	err = fuse_simple_request(fm, &args);
+
+	return err;
+}
+EXPORT_SYMBOL(fuse_fsnotify_send_request);
 
 /* Look up request on processing list by unique ID */
 static struct fuse_req *request_find(struct fuse_pqueue *fpq, u64 unique)

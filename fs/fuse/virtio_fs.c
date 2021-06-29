@@ -17,6 +17,7 @@
 #include <linux/highmem.h>
 #include <linux/uio.h>
 #include "fuse_i.h"
+#include <linux/fsnotify_backend.h>
 
 /* Used to help calculate the FUSE connection's max_pages limit for a request's
  * size. Parts of the struct fuse_req are sliced into scattergather lists in
@@ -604,21 +605,89 @@ static int notify_complete_waiting_req(struct virtio_fs *vfs,
 	return 0;
 }
 
+static int fsnotify_remote_event(struct inode *inode, uint32_t mask, uint32_t cookie)
+{
+	mask |= FS_FSNOTIFY_REMOTE;
+	return fsnotify(mask, NULL, 0, NULL, NULL, inode, cookie);
+}
+
+static int fsnotify_remote_event_child(struct inode *inode, uint32_t mask,
+				struct qstr *filename, uint32_t cookie)
+{
+	mask |= FS_FSNOTIFY_REMOTE;
+	return fsnotify(mask, NULL, 0, NULL,
+			(const struct qstr *)filename, inode, cookie);
+}
+
+/*
+ * Function to generate a new event when a fsnotify notification comes from the
+ * fuse server
+ */
+static int generate_fsnotify_event(struct fuse_conn *fc,
+			struct fuse_notify_fsnotify_out *fsnotify_out)
+{
+	struct inode *inode;
+	uint32_t mask, cookie;
+	struct fuse_mount *fm;
+	int ret = -1;
+	struct qstr name;
+	
+	down_read(&fc->killsb);
+	inode = fuse_ilookup(fc, fsnotify_out->inode, &fm);
+	/*
+	 * The inode that corresponds to the event does not exist in this case
+	 * so do not generate any new event and just return an error
+	 */
+	if (!inode)
+		goto out;
+
+	mask = fsnotify_out->mask;
+	cookie = fsnotify_out->cookie;
+
+	/*
+	 * If the notification contained the name of the file/dir the event
+	 * occured for, it will be placed after the fsnotify_out struct in the
+	 * notification message
+	 */
+	if (fsnotify_out->namelen > 0) {
+		name.len = fsnotify_out->namelen;
+		name.name = (char *)fsnotify_out + sizeof(struct fuse_notify_fsnotify_out);
+		printk(KERN_INFO "Got a child notification event with name %s and mask 0x%x\n", name.name, mask);
+		ret = fsnotify_remote_event_child(inode, mask, &name, cookie);
+	} else {
+		printk(KERN_INFO "Got a non child notification event with mask 0x%x\n", mask);
+		ret = fsnotify_remote_event(inode, mask, cookie);
+	}
+
+	up_read(&fc->killsb);
+out:
+	if (ret < 0)
+		return -EINVAL;
+
+	return ret;
+}
+
 static int virtio_fs_handle_notify(struct virtio_fs *vfs,
-				   struct virtio_fs_notify *notify)
+				   struct virtio_fs_notify *notify,
+				   struct fuse_conn *fc)
 {
 	int ret = 0;
 	struct fuse_out_header *oh = &notify->out_hdr;
 	struct fuse_notify_lock_out *lo;
+	struct fuse_notify_fsnotify_out *fsnotify_out;
 
 	/*
 	 * For notifications, oh.unique is 0 and oh->error contains code
-	 * for which notification as arrived.
+	ich notification as arrived.
 	 */
 	switch (oh->error) {
 	case FUSE_NOTIFY_LOCK:
 		lo = (struct fuse_notify_lock_out *) &notify->outarg;
 		notify_complete_waiting_req(vfs, lo);
+		break;
+	case FUSE_NOTIFY_FSNOTIFY:
+		fsnotify_out = (struct fuse_notify_fsnotify_out *) &notify->outarg;
+		generate_fsnotify_event(fc, fsnotify_out);
 		break;
 	default:
 		pr_err("virtio-fs: Unexpected notification %d\n", oh->error);
@@ -653,7 +722,7 @@ static void virtio_fs_notify_done_work(struct work_struct *work)
 		oh = &notify->notify.out_hdr;
 		WARN_ON(oh->unique);
 		/* Handle notification */
-		virtio_fs_handle_notify(vfs, &notify->notify);
+		virtio_fs_handle_notify(vfs, &notify->notify, fsvq->fud->fc);
 		spin_lock(&fsvq->lock);
 		dec_in_flight_req(fsvq);
 		list_del_init(&notify->list);
