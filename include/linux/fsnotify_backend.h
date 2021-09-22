@@ -47,6 +47,7 @@
 #define FS_OPEN_PERM		0x00010000	/* open event in an permission hook */
 #define FS_ACCESS_PERM		0x00020000	/* access event in a permissions hook */
 #define FS_OPEN_EXEC_PERM	0x00040000	/* open/exec event in a permission hook */
+#define FS_FSNOTIFY_REMOTE	0x00800000	/* Support fsnotify on remote filesystems */
 
 #define FS_EXCL_UNLINK		0x04000000	/* do not send events if object is unlinked */
 /*
@@ -81,7 +82,7 @@
 #define FS_EVENTS_POSS_ON_CHILD   (ALL_FSNOTIFY_PERM_EVENTS | \
 				   FS_ACCESS | FS_MODIFY | FS_ATTRIB | \
 				   FS_CLOSE_WRITE | FS_CLOSE_NOWRITE | \
-				   FS_OPEN | FS_OPEN_EXEC)
+				   FS_OPEN | FS_OPEN_EXEC | FS_FSNOTIFY_REMOTE)
 
 /*
  * This is a list of all events that may get sent with the parent inode as the
