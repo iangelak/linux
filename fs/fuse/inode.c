@@ -1097,6 +1097,9 @@ static void process_init_reply(struct fuse_mount *fm, struct fuse_args *args,
 				if (!(arg->flags & FUSE_POSIX_LOCKS))
 					fc->no_flock = 1;
 			}
+			if (!(arg->flags & FUSE_HAVE_FSNOTIFY)) {
+				fc->no_fsnotify = 1;
+			}
 			if (arg->flags & FUSE_ATOMIC_O_TRUNC)
 				fc->atomic_o_trunc = 1;
 			if (arg->minor >= 9) {
@@ -1199,6 +1202,9 @@ void fuse_send_init(struct fuse_mount *fm)
 #ifdef CONFIG_FUSE_DAX
 	if (fm->fc->dax)
 		ia->in.flags |= FUSE_MAP_ALIGNMENT;
+#endif
+#ifdef CONFIG_INOTIFY_USER
+	ia->in.flags |= FUSE_HAVE_FSNOTIFY;
 #endif
 	if (fm->fc->auto_submounts)
 		ia->in.flags |= FUSE_SUBMOUNTS;
