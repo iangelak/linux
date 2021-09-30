@@ -440,7 +440,7 @@ static void fsnotify_iter_next(struct fsnotify_iter_info *iter_info)
 }
 
 /*
- * fsnotify - This is the main call to fsnotify.
+ * __fsnotify - This is the main call to fsnotify.
  *
  * The VFS calls into hook specific functions in linux/fsnotify.h.
  * Those functions then in turn call here.  Here will call out to all of the
@@ -459,7 +459,7 @@ static void fsnotify_iter_next(struct fsnotify_iter_info *iter_info)
  *		if both are non-NULL event may be reported to both.
  * @cookie:	inotify rename cookie
  */
-int fsnotify(__u32 mask, const void *data, int data_type, struct inode *dir,
+int __fsnotify(__u32 mask, const void *data, int data_type, struct inode *dir,
 	     const struct qstr *file_name, struct inode *inode, u32 cookie)
 {
 	const struct path *path = fsnotify_data_path(data, data_type);
@@ -551,6 +551,38 @@ out:
 	srcu_read_unlock(&fsnotify_mark_srcu, iter_info.srcu_idx);
 
 	return ret;
+}
+
+/*
+ * Wrapper around fsnotify. The main functionality is to filter local events in
+ * case the inode belongs to a filesystem that supports remote events
+ */
+int fsnotify(__u32 mask, const void *data, int data_type, struct inode *dir,
+	     const struct qstr *file_name, struct inode *inode, u32 cookie)
+{
+	int i_ret = 1, d_ret = 1;
+
+	if ((inode != NULL)) {
+		if (inode->i_op->fsnotify_remote) {
+			i_ret = inode->i_op->fsnotify_remote(inode, &mask);
+			/* We need to suppress the event so just return */
+			if (i_ret) {
+				return 0;
+			}
+		}
+	}
+
+	if ((dir != NULL)) {
+		if (dir->i_op->fsnotify_remote) {
+			d_ret = dir->i_op->fsnotify_remote(dir, &mask);
+			/* We need to suppress the event so just return */
+			if (d_ret) {
+				return 0;
+			}
+		}
+	}
+
+	return __fsnotify(mask, data, data_type, dir, file_name, inode, cookie);
 }
 EXPORT_SYMBOL_GPL(fsnotify);
 
