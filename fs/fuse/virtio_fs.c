@@ -395,6 +395,15 @@ static void virtio_fs_hiprio_done_work(struct work_struct *work)
 	spin_unlock(&fsvq->lock);
 }
 
+static void end_req_dec_in_flight(struct fuse_req *req,
+				  struct virtio_fs_vq *fsvq)
+{
+	fuse_request_end(req);
+	spin_lock(&fsvq->lock);
+	dec_in_flight_req(fsvq);
+	spin_unlock(&fsvq->lock);
+}
+
 static void virtio_fs_request_dispatch_work(struct work_struct *work)
 {
 	struct fuse_req *req;
@@ -440,12 +449,9 @@ static void virtio_fs_request_dispatch_work(struct work_struct *work)
 				return;
 			}
 			req->out.h.error = ret;
-			spin_lock(&fsvq->lock);
-			dec_in_flight_req(fsvq);
-			spin_unlock(&fsvq->lock);
 			pr_err("virtio-fs: virtio_fs_enqueue_req() failed %d\n",
 			       ret);
-			fuse_request_end(req);
+			end_req_dec_in_flight(req, fsvq);
 		}
 	}
 }
@@ -724,10 +730,7 @@ static void virtio_fs_request_complete(struct fuse_req *req,
 		}
 	}
 
-	fuse_request_end(req);
-	spin_lock(&fsvq->lock);
-	dec_in_flight_req(fsvq);
-	spin_unlock(&fsvq->lock);
+	end_req_dec_in_flight(req, fsvq);
 }
 
 static void virtio_fs_complete_req_work(struct work_struct *work)
