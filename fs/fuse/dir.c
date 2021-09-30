@@ -1805,6 +1805,30 @@ static int fuse_getattr(struct user_namespace *mnt_userns,
 	return fuse_update_get_attr(inode, NULL, stat, request_mask, flags);
 }
 
+static int fuse_fsnotify_update_mark(struct inode *inode, uint32_t action,
+				     uint64_t group, uint32_t mask)
+{
+	/*
+	 * We have to remove the bits added to the mask before being attached
+	 * or detached to the inode, since these bits are going to be
+	 * added by the "remote" host kernel. If these bits were still enabled
+	 * in the mask that was sent to the "remote" kernel then the watch would
+	 * be rejected as an unsupported value.
+	 */
+	mask = mask & ~(FS_IN_IGNORED | FS_UNMOUNT | FS_IN_ONESHOT | \
+			FS_EXCL_UNLINK | FS_EVENT_ON_CHILD);
+
+	if (!(mask & FUSE_FSNOTIFY_SUPPORTED)) {
+		return EINVAL;
+	}
+
+	/*
+	 * Action 0: Remove a watch
+	 * Action 1: Add/Modify watch
+	 */
+	return fuse_fsnotify_send_request(inode, mask, action, group);
+}
+
 static const struct inode_operations fuse_dir_inode_operations = {
 	.lookup		= fuse_lookup,
 	.mkdir		= fuse_mkdir,
@@ -1824,6 +1848,7 @@ static const struct inode_operations fuse_dir_inode_operations = {
 	.set_acl	= fuse_set_acl,
 	.fileattr_get	= fuse_fileattr_get,
 	.fileattr_set	= fuse_fileattr_set,
+	.fsnotify_update = fuse_fsnotify_update_mark,
 };
 
 static const struct file_operations fuse_dir_operations = {
@@ -1846,6 +1871,7 @@ static const struct inode_operations fuse_common_inode_operations = {
 	.set_acl	= fuse_set_acl,
 	.fileattr_get	= fuse_fileattr_get,
 	.fileattr_set	= fuse_fileattr_set,
+	.fsnotify_update = fuse_fsnotify_update_mark,
 };
 
 static const struct inode_operations fuse_symlink_inode_operations = {
@@ -1853,6 +1879,7 @@ static const struct inode_operations fuse_symlink_inode_operations = {
 	.get_link	= fuse_get_link,
 	.getattr	= fuse_getattr,
 	.listxattr	= fuse_listxattr,
+	.fsnotify_update = fuse_fsnotify_update_mark,
 };
 
 void fuse_init_common(struct inode *inode)
