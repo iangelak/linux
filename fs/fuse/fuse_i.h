@@ -1243,6 +1243,9 @@ struct posix_acl *fuse_get_acl(struct inode *inode, int type, bool rcu);
 int fuse_set_acl(struct user_namespace *mnt_userns, struct inode *inode,
 		 struct posix_acl *acl, int type);
 
+int fuse_fsnotify_send_request(struct inode *inode, uint32_t mask,
+			       uint32_t action, uint64_t group);
+
 /* readdir.c */
 int fuse_readdir(struct file *file, struct dir_context *ctx);
 
