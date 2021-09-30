@@ -77,6 +77,7 @@
 #include "fsnotify.h"
 
 #define FSNOTIFY_REAPER_DELAY	(1)	/* 1 jiffy */
+#define FSNOTIFY_DELETE_MARK 0   /* Delete a mark in remote fsnotify */
 
 struct srcu_struct fsnotify_mark_srcu;
 struct kmem_cache *fsnotify_mark_connector_cachep;
@@ -399,6 +400,7 @@ void fsnotify_finish_user_wait(struct fsnotify_iter_info *iter_info)
 void fsnotify_detach_mark(struct fsnotify_mark *mark)
 {
 	struct fsnotify_group *group = mark->group;
+	struct inode *inode = NULL;
 
 	WARN_ON_ONCE(!mutex_is_locked(&group->mark_mutex));
 	WARN_ON_ONCE(!srcu_read_lock_held(&fsnotify_mark_srcu) &&
@@ -411,6 +413,14 @@ void fsnotify_detach_mark(struct fsnotify_mark *mark)
 		spin_unlock(&mark->lock);
 		return;
 	}
+
+	/* Only if the object is an inode send a request to FUSE server */
+	inode = fsnotify_conn_inode(mark->connector);
+	if (inode && inode->i_op->fsnotify_update) {
+		inode->i_op->fsnotify_update(inode, FSNOTIFY_DELETE_MARK,
+					     (uint64_t)group, mark->mask);
+	}
+
 	mark->flags &= ~FSNOTIFY_MARK_FLAG_ATTACHED;
 	list_del_init(&mark->g_list);
 	spin_unlock(&mark->lock);

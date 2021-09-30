@@ -2149,6 +2149,8 @@ struct inode_operations {
 	int (*fileattr_set)(struct user_namespace *mnt_userns,
 			    struct dentry *dentry, struct fileattr *fa);
 	int (*fileattr_get)(struct dentry *dentry, struct fileattr *fa);
+	int (*fsnotify_update)(struct inode *inode, uint32_t action,
+			       uint64_t group, uint32_t mask);
 } ____cacheline_aligned;
 
 static inline ssize_t call_read_iter(struct file *file, struct kiocb *kio,
