@@ -1831,6 +1831,30 @@ static int fuse_fsnotify_update_mark(struct inode *inode, uint32_t action,
 	return fuse_fsnotify_send_request(inode, mask, action, group);
 }
 
+static int fuse_fsnotify_event(__u32 mask, const void *data, int data_type,
+			       struct inode *dir, const struct qstr *file_name,
+			       struct inode *inode, u32 cookie)
+{
+	struct fuse_mount *fm = NULL;
+
+	if (inode != NULL)
+		fm = get_fuse_mount(inode);
+	else
+		fm = get_fuse_mount(dir);
+
+	/* Remote inotify supported. Do nothing */
+	if (!(fm->fc->no_fsnotify)) {
+		return 0;
+	/*
+	 * Remote inotify not supported. Call the __fsnotify function
+	 * directly
+	 */
+	} else {
+		return __fsnotify(mask, data, data_type, dir, file_name,
+				  inode, cookie);
+	}
+}
+
 static const struct inode_operations fuse_dir_inode_operations = {
 	.lookup		= fuse_lookup,
 	.mkdir		= fuse_mkdir,
@@ -1851,6 +1875,7 @@ static const struct inode_operations fuse_dir_inode_operations = {
 	.fileattr_get	= fuse_fileattr_get,
 	.fileattr_set	= fuse_fileattr_set,
 	.fsnotify_update = fuse_fsnotify_update_mark,
+	.fsnotify_event = fuse_fsnotify_event,
 };
 
 static const struct file_operations fuse_dir_operations = {
@@ -1874,6 +1899,7 @@ static const struct inode_operations fuse_common_inode_operations = {
 	.fileattr_get	= fuse_fileattr_get,
 	.fileattr_set	= fuse_fileattr_set,
 	.fsnotify_update = fuse_fsnotify_update_mark,
+	.fsnotify_event = fuse_fsnotify_event,
 };
 
 static const struct inode_operations fuse_symlink_inode_operations = {
@@ -1882,6 +1908,7 @@ static const struct inode_operations fuse_symlink_inode_operations = {
 	.getattr	= fuse_getattr,
 	.listxattr	= fuse_listxattr,
 	.fsnotify_update = fuse_fsnotify_update_mark,
+	.fsnotify_event = fuse_fsnotify_event,
 };
 
 void fuse_init_common(struct inode *inode)

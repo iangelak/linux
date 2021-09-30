@@ -2151,6 +2151,9 @@ struct inode_operations {
 	int (*fileattr_get)(struct dentry *dentry, struct fileattr *fa);
 	int (*fsnotify_update)(struct inode *inode, uint32_t action,
 			       uint64_t group, uint32_t mask);
+	int (*fsnotify_event)(__u32 mask, const void *data, int data_type,
+			      struct inode *dir, const struct qstr *file_name,
+			      struct inode *inode, u32 cookie);
 } ____cacheline_aligned;
 
 static inline ssize_t call_read_iter(struct file *file, struct kiocb *kio,
