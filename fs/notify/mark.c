@@ -77,6 +77,7 @@
 #include "fsnotify.h"
 
 #define FSNOTIFY_REAPER_DELAY	(1)	/* 1 jiffy */
+#define FSNOTIFY_DELETE_MARK 0   /* Delete a mark in remote fsnotify */
 
 struct srcu_struct fsnotify_mark_srcu;
 struct kmem_cache *fsnotify_mark_connector_cachep;
@@ -120,6 +121,7 @@ static void __fsnotify_recalc_mask(struct fsnotify_mark_connector *conn)
 {
 	u32 new_mask = 0;
 	struct fsnotify_mark *mark;
+	struct inode *inode = NULL;
 
 	assert_spin_locked(&conn->lock);
 	/* We can get detached connector here when inode is getting unlinked. */
@@ -130,6 +132,13 @@ static void __fsnotify_recalc_mask(struct fsnotify_mark_connector *conn)
 			new_mask |= mark->mask;
 	}
 	*fsnotify_conn_mask_p(conn) = new_mask;
+	/* Only if the object is an inode send a request to FUSE server */
+	if (conn->type == FSNOTIFY_OBJ_TYPE_INODE){
+		inode = fsnotify_conn_inode(conn);
+		if (inode && inode->i_op->fsnotify_update) {
+			inode->i_op->fsnotify_update(inode);
+		}
+	}
 }
 
 /*
@@ -223,6 +232,13 @@ static void *fsnotify_detach_connector_from_object(
 	rcu_assign_pointer(*(conn->obj), NULL);
 	conn->obj = NULL;
 	conn->type = FSNOTIFY_OBJ_TYPE_DETACHED;
+	/*
+	 * If remote fsnotify is also enabled send the updated watch to the
+	 * server
+	 */
+	if (inode && inode->i_op->fsnotify_update) {
+		inode->i_op->fsnotify_update(inode);
+	}
 
 	return inode;
 }
@@ -411,6 +427,7 @@ void fsnotify_detach_mark(struct fsnotify_mark *mark)
 		spin_unlock(&mark->lock);
 		return;
 	}
+
 	mark->flags &= ~FSNOTIFY_MARK_FLAG_ATTACHED;
 	list_del_init(&mark->g_list);
 	spin_unlock(&mark->lock);

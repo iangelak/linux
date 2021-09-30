@@ -46,6 +46,8 @@
 #define INOTIFY_WATCH_COST	(sizeof(struct inotify_inode_mark) + \
 				 2 * sizeof(struct inode))
 
+#define FSNOTIFY_ADD_MODIFY_MARK	1
+
 /* configurable via /proc/sys/fs/inotify/ */
 static int inotify_max_queued_events __read_mostly;
 
