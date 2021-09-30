@@ -46,6 +46,8 @@
 #define INOTIFY_WATCH_COST	(sizeof(struct inotify_inode_mark) + \
 				 2 * sizeof(struct inode))
 
+#define FSNOTIFY_ADD_MODIFY_REMOTE_MARK	1
+
 /* configurable via /proc/sys/fs/inotify/ */
 static int inotify_max_queued_events __read_mostly;
 
@@ -764,6 +766,16 @@ SYSCALL_DEFINE3(inotify_add_watch, int, fd, const char __user *, pathname,
 
 	/* create/update an inode mark */
 	ret = inotify_update_watch(group, inode, mask);
+	/*
+	 * If the inode belongs to a remote filesystem/server that supports
+	 * remote fsnotify/inotify events then send the mark to the remote
+	 * server
+	 */
+	if (ret >= 0 && inode->i_op->fsnotify_update) {
+		inode->i_op->fsnotify_update(inode,
+					     FSNOTIFY_ADD_MODIFY_REMOTE_MARK,
+					     (uint64_t)group, mask);
+	}
 	path_put(&path);
 fput_and_out:
 	fdput(f);
