@@ -16,6 +16,7 @@
 #include <linux/fs_parser.h>
 #include <linux/highmem.h>
 #include <linux/uio.h>
+#include <linux/namei.h>
 #include <linux/fsnotify_backend.h>
 #include "fuse_i.h"
 
@@ -672,9 +673,31 @@ static void notify_node_reuse(struct virtio_fs_vq *notify_fsvq,
 }
 
 static int fsnotify_remote_event(struct inode *inode, uint32_t mask,
-				 struct qstr *filename, uint32_t cookie)
-{
-	return __fsnotify(mask, NULL, 0, NULL,
+				 struct qstr *filename, uint32_t cookie){
+	/*struct path path;*/
+	/*struct file *file;*/
+	/*int ret;*/
+	/*ret = kern_path("/mnt/test_file", LOOKUP_PARENT, &path);*/
+	/*printk(KERN_INFO "Running the kernel path func\n");*/
+	/*if (ret < 0) {*/
+		/*printk(KERN_INFO "The kern_path function was unsuccessful\n");*/
+		/*return ret;*/
+	/*}*/
+
+	/*file = container_of(&path, struct file, f_path);*/
+	/*printk(KERN_INFO "File mode 0x%x\n", file->f_mode);*/
+	/*printk(KERN_INFO "FMODE_NONOTIFY 0x%x\n", FMODE_NONOTIFY);*/
+	/*if (file->f_mode & FMODE_NONOTIFY){*/
+		/*printk(KERN_INFO "No notify mode, returning...\n");*/
+		/*return 0;*/
+	/*}*/
+
+	/*printk(KERN_INFO "Inode belongs to superblock %s with type %s and id %s\n", inode->i_sb->s_root->d_name.name, inode->i_sb->s_type->name, inode->i_sb->s_id);*/
+	/*
+	 * The use of FSNOTIFY_EVENT_INODE will not work for all the
+	 * events (e.g., (IN/FAN)_MOVE). Needs to be taken care of
+	 */
+	return __fsnotify(mask, inode, FSNOTIFY_EVENT_INODE, NULL,
 			  (const struct qstr *)filename, inode, cookie);
 }
 
@@ -686,7 +709,7 @@ static int generate_fsnotify_event(struct fuse_conn *fc,
 			struct fuse_notify_fsnotify_out *fsnotify_out)
 {
 	struct inode *inode;
-	uint32_t mask, cookie;
+	uint32_t mask, cookie, generation;
 	struct fuse_mount *fm;
 	int ret = -1;
 	struct qstr name;
@@ -697,11 +720,15 @@ static int generate_fsnotify_event(struct fuse_conn *fc,
 	 * The inode that corresponds to the event does not exist in this case
 	 * so do not generate any new event and just return an error
 	 */
-	if (!inode)
-		goto out;
-
 	mask = fsnotify_out->mask;
 	cookie = fsnotify_out->cookie;
+	generation = fsnotify_out->generation;
+
+	/* Generation check */
+	if (!inode || inode->i_generation != generation)
+		goto out;
+
+	printk("Got event for inode %llu with generation %lu and i_generation %lu", fsnotify_out->inode, generation, inode->i_generation);
 
 	/*
 	 * If the notification contained the name of the file/dir the event

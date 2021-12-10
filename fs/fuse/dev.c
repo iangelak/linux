@@ -1820,6 +1820,7 @@ int fuse_fsnotify_send_request(struct inode *inode, uint32_t mask)
 	 */
 	memset(&inarg, 0, sizeof(struct fuse_notify_fsnotify_in));
 	inarg.mask = mask;
+	inarg.generation = inode->i_generation;
 
 	args.opcode = FUSE_FSNOTIFY;
 	args.nodeid = get_node_id(inode);

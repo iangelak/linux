@@ -608,11 +608,13 @@ struct fuse_notify_fsnotify_out {
 	uint64_t mask;
 	uint32_t namelen;
 	uint32_t cookie;
+	uint32_t generation;
+	uint32_t padding;
 };
 
 struct fuse_notify_fsnotify_in {
 	uint32_t mask;
-	uint32_t padding;
+	uint32_t generation;
 };
 
 #define FUSE_COMPAT_ATTR_OUT_SIZE 96
