@@ -793,6 +793,18 @@ static int btrfs_insert_delayed_item(struct btrfs_trans_handle *trans,
 		list_del(&curr->tree_list);
 		btrfs_release_delayed_item(curr);
 	}
+
+	/*
+	 * We inserted one batch of items into a leaf, now release one unit of
+	 * metadata space from the delayed block reserve.
+	 */
+	if (!test_bit(BTRFS_FS_LOG_RECOVERING, &fs_info->flags))
+		btrfs_block_rsv_release(fs_info, &fs_info->delayed_block_rsv,
+					btrfs_calc_insert_metadata_size(fs_info, 1),
+					NULL);
+
+	ASSERT(node->index_items_size >= total_size);
+	node->index_items_size -= total_size;
 out:
 	kfree(ins_data);
 	return ret;
@@ -1399,6 +1411,23 @@ void btrfs_balance_delayed_items(struct btrfs_fs_info *fs_info)
 	btrfs_wq_run_delayed_node(delayed_root, fs_info, BTRFS_DELAYED_BATCH);
 }
 
+/*
+ * Return how many leaves of metadata we will use for inserting a given amount
+ * (in bytes) of dir index items (including sizeof struct btrfs_item).
+ */
+static unsigned int num_dir_index_leaves(const struct btrfs_fs_info *fs_info,
+					 u32 index_items_size)
+{
+	const unsigned int leaf_data_size = BTRFS_LEAF_DATA_SIZE(fs_info);
+	unsigned int result;
+
+	result = index_items_size / leaf_data_size;
+	if ((index_items_size % leaf_data_size) != 0)
+		result++;
+
+	return result;
+}
+
 /* Will return 0 or -ENOMEM */
 int btrfs_insert_delayed_dir_index(struct btrfs_trans_handle *trans,
 				   const char *name, int name_len,
@@ -1491,6 +1520,7 @@ int btrfs_insert_delayed_dir_index(struct btrfs_trans_handle *trans,
 			  delayed_node->inode_id, ret);
 		BUG();
 	}
+	delayed_node->index_items_size += data_len;
 	mutex_unlock(&delayed_node->mutex);
 
 release_node:
@@ -1503,6 +1533,9 @@ static int btrfs_delete_delayed_insertion_item(struct btrfs_fs_info *fs_info,
 					       struct btrfs_key *key)
 {
 	struct btrfs_delayed_item *item;
+	unsigned int leaves_before;
+	unsigned int leaves_after;
+	u32 data_len;
 
 	mutex_lock(&node->mutex);
 	item = __btrfs_lookup_delayed_insertion_item(node, key);
