@@ -226,6 +226,9 @@ static void submit_write_bio(struct extent_page_data *epd, int ret)
 	} else {
 		submit_one_bio(&epd->bio_ctrl);
 	}
+
+	/* The bio is owned by the bi_end_io handler now */
+	epd->bio_ctrl.bio = NULL;
 }
 
 int __init extent_state_cache_init(void)
