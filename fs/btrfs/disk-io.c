@@ -3025,6 +3025,8 @@ static int __cold init_tree_roots(struct btrfs_fs_info *fs_info)
 
 void btrfs_init_fs_info(struct btrfs_fs_info *fs_info)
 {
+	static struct lock_class_key btrfs_trans_commit_key;
+
 	xa_init_flags(&fs_info->fs_roots, GFP_ATOMIC);
 	xa_init_flags(&fs_info->extent_buffers, GFP_ATOMIC);
 	INIT_LIST_HEAD(&fs_info->trans_list);
@@ -3140,6 +3142,9 @@ void btrfs_init_fs_info(struct btrfs_fs_info *fs_info)
 
 	spin_lock_init(&fs_info->swapfile_pins_lock);
 	fs_info->swapfile_pins = RB_ROOT;
+
+	lockdep_init_map(&fs_info->btrfs_trans_commit_map, "btrfs_trans",
+                     &btrfs_trans_commit_key, 0);
 
 	fs_info->bg_reclaim_threshold = BTRFS_DEFAULT_RECLAIM_THRESH;
 	INIT_WORK(&fs_info->reclaim_bgs_work, btrfs_reclaim_bgs_work);

@@ -291,11 +291,13 @@ static noinline int join_transaction(struct btrfs_fs_info *fs_info,
 {
 	struct btrfs_transaction *cur_trans;
 
+	rwsem_acquire_read(&fs_info->btrfs_trans_commit_map, 0, 0, _THIS_IP_);
 	spin_lock(&fs_info->trans_lock);
 loop:
 	/* The file system has been taken offline. No new transactions. */
 	if (BTRFS_FS_ERROR(fs_info)) {
 		spin_unlock(&fs_info->trans_lock);
+		rwsem_release(&fs_info->btrfs_trans_commit_map, _THIS_IP_);
 		return -EROFS;
 	}
 
@@ -303,10 +305,12 @@ loop:
 	if (cur_trans) {
 		if (TRANS_ABORTED(cur_trans)) {
 			spin_unlock(&fs_info->trans_lock);
+			rwsem_release(&fs_info->btrfs_trans_commit_map, _THIS_IP_);
 			return cur_trans->aborted;
 		}
 		if (btrfs_blocked_trans_types[cur_trans->state] & type) {
 			spin_unlock(&fs_info->trans_lock);
+			rwsem_release(&fs_info->btrfs_trans_commit_map, _THIS_IP_);
 			return -EBUSY;
 		}
 		refcount_inc(&cur_trans->use_count);
@@ -321,8 +325,10 @@ loop:
 	 * If we are ATTACH, we just want to catch the current transaction,
 	 * and commit it. If there is no transaction, just return ENOENT.
 	 */
-	if (type == TRANS_ATTACH)
+	if (type == TRANS_ATTACH) {
+		rwsem_release(&fs_info->btrfs_trans_commit_map, _THIS_IP_);
 		return -ENOENT;
+	}
 
 	/*
 	 * JOIN_NOLOCK only happens during the transaction commit, so
@@ -331,8 +337,10 @@ loop:
 	BUG_ON(type == TRANS_JOIN_NOLOCK);
 
 	cur_trans = kmalloc(sizeof(*cur_trans), GFP_NOFS);
-	if (!cur_trans)
+	if (!cur_trans){
+		rwsem_release(&fs_info->btrfs_trans_commit_map, _THIS_IP_);
 		return -ENOMEM;
+	}
 
 	spin_lock(&fs_info->trans_lock);
 	if (fs_info->running_transaction) {
@@ -344,6 +352,7 @@ loop:
 		goto loop;
 	} else if (BTRFS_FS_ERROR(fs_info)) {
 		spin_unlock(&fs_info->trans_lock);
+		rwsem_release(&fs_info->btrfs_trans_commit_map, _THIS_IP_);
 		kfree(cur_trans);
 		return -EROFS;
 	}
@@ -538,7 +547,6 @@ static void wait_current_trans(struct btrfs_fs_info *fs_info)
 	if (cur_trans && is_transaction_blocked(cur_trans)) {
 		refcount_inc(&cur_trans->use_count);
 		spin_unlock(&fs_info->trans_lock);
-
 		wait_event(fs_info->transaction_wait,
 			   cur_trans->state >= TRANS_STATE_UNBLOCKED ||
 			   TRANS_ABORTED(cur_trans));
@@ -675,7 +683,7 @@ again:
 	 * and then we deadlock with somebody doing a freeze.
 	 *
 	 * If we are ATTACH, it means we just want to catch the current
-	 * transaction and commit it, so we needn't do sb_start_intwrite(). 
+	 * transaction and commit it, so we needn't do sb_start_intwrite().
 	 */
 	if (type & __TRANS_FREEZABLE)
 		sb_start_intwrite(fs_info->sb);
@@ -757,7 +765,6 @@ got_it:
 		btrfs_end_transaction(h);
 		return ERR_PTR(ret);
 	}
-
 	return h;
 
 join_fail:
@@ -1016,6 +1023,7 @@ static int __btrfs_end_transaction(struct btrfs_trans_handle *trans,
 
 	WARN_ON(cur_trans != info->running_transaction);
 	WARN_ON(atomic_read(&cur_trans->num_writers) < 1);
+	rwsem_release(&info->btrfs_trans_commit_map, _THIS_IP_);
 	atomic_dec(&cur_trans->num_writers);
 	extwriter_counter_dec(cur_trans, trans->type);
 
@@ -1027,6 +1035,7 @@ static int __btrfs_end_transaction(struct btrfs_trans_handle *trans,
 
 	if (throttle)
 		btrfs_run_delayed_iputs(info);
+
 
 	if (TRANS_ABORTED(trans) || BTRFS_FS_ERROR(info)) {
 		wake_up_process(info->transaction_kthread);
@@ -1979,10 +1988,12 @@ static void cleanup_transaction(struct btrfs_trans_handle *trans, int err)
 
 	if (cur_trans == fs_info->running_transaction) {
 		cur_trans->state = TRANS_STATE_COMMIT_DOING;
+		rwsem_release(&fs_info->btrfs_trans_commit_map, _THIS_IP_);
+		btrfs_might_wait_for_commit(fs_info);
+		rwsem_acquire_read(&fs_info->btrfs_trans_commit_map, 0, 0, _THIS_IP_);
 		spin_unlock(&fs_info->trans_lock);
 		wait_event(cur_trans->writer_wait,
 			   atomic_read(&cur_trans->num_writers) == 1);
-
 		spin_lock(&fs_info->trans_lock);
 	}
 
@@ -2242,6 +2253,8 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 	if (ret)
 		goto cleanup_transaction;
 
+	rwsem_release(&fs_info->btrfs_trans_commit_map, _THIS_IP_);
+	btrfs_might_wait_for_commit(fs_info);
 	wait_event(cur_trans->writer_wait,
 		   extwriter_counter_read(cur_trans) == 0);
 
@@ -2250,6 +2263,7 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 	if (ret)
 		goto cleanup_transaction;
 
+	rwsem_acquire_read(&fs_info->btrfs_trans_commit_map, 0, 0, _THIS_IP_);
 	btrfs_wait_delalloc_flush(fs_info);
 
 	/*
@@ -2266,6 +2280,8 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 	 * commit the transaction.  We could have started a join before setting
 	 * COMMIT_DOING so make sure to wait for num_writers to == 1 again.
 	 */
+	rwsem_release(&fs_info->btrfs_trans_commit_map, _THIS_IP_);
+	btrfs_might_wait_for_commit(fs_info);
 	spin_lock(&fs_info->trans_lock);
 	add_pending_snapshot(trans);
 	cur_trans->state = TRANS_STATE_COMMIT_DOING;
@@ -2498,6 +2514,7 @@ cleanup_transaction:
 	btrfs_warn(fs_info, "Skipping commit of aborted transaction.");
 	if (current->journal_info == trans)
 		current->journal_info = NULL;
+	rwsem_acquire_read(&fs_info->btrfs_trans_commit_map, 0, 0, _THIS_IP_);
 	cleanup_transaction(trans, ret);
 
 	return ret;
