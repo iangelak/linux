@@ -692,7 +692,9 @@ again:
 		wait_current_trans(fs_info);
 
 	do {
+		rwsem_acquire_read(&fs_info->btrfs_trans_commit_map, 0, 0, _THIS_IP_);
 		ret = join_transaction(fs_info, type);
+		rwsem_release(&fs_info->btrfs_trans_commit_map, _THIS_IP_);
 		if (ret == -EBUSY) {
 			wait_current_trans(fs_info);
 			if (unlikely(type == TRANS_ATTACH ||
@@ -1023,8 +1025,9 @@ static int __btrfs_end_transaction(struct btrfs_trans_handle *trans,
 
 	WARN_ON(cur_trans != info->running_transaction);
 	WARN_ON(atomic_read(&cur_trans->num_writers) < 1);
-	rwsem_release(&info->btrfs_trans_commit_map, _THIS_IP_);
+	rwsem_acquire_read(&info->btrfs_trans_commit_map, 0, 0, _THIS_IP_);
 	atomic_dec(&cur_trans->num_writers);
+	rwsem_release(&info->btrfs_trans_commit_map, _THIS_IP_);
 	extwriter_counter_dec(cur_trans, trans->type);
 
 	cond_wake_up(&cur_trans->writer_wait);
@@ -1988,9 +1991,7 @@ static void cleanup_transaction(struct btrfs_trans_handle *trans, int err)
 
 	if (cur_trans == fs_info->running_transaction) {
 		cur_trans->state = TRANS_STATE_COMMIT_DOING;
-		rwsem_release(&fs_info->btrfs_trans_commit_map, _THIS_IP_);
 		btrfs_might_wait_for_commit(fs_info);
-		rwsem_acquire_read(&fs_info->btrfs_trans_commit_map, 0, 0, _THIS_IP_);
 		spin_unlock(&fs_info->trans_lock);
 		wait_event(cur_trans->writer_wait,
 			   atomic_read(&cur_trans->num_writers) == 1);
@@ -2253,7 +2254,6 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 	if (ret)
 		goto cleanup_transaction;
 
-	rwsem_release(&fs_info->btrfs_trans_commit_map, _THIS_IP_);
 	btrfs_might_wait_for_commit(fs_info);
 	wait_event(cur_trans->writer_wait,
 		   extwriter_counter_read(cur_trans) == 0);
@@ -2263,7 +2263,6 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 	if (ret)
 		goto cleanup_transaction;
 
-	rwsem_acquire_read(&fs_info->btrfs_trans_commit_map, 0, 0, _THIS_IP_);
 	btrfs_wait_delalloc_flush(fs_info);
 
 	/*
@@ -2280,7 +2279,6 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 	 * commit the transaction.  We could have started a join before setting
 	 * COMMIT_DOING so make sure to wait for num_writers to == 1 again.
 	 */
-	rwsem_release(&fs_info->btrfs_trans_commit_map, _THIS_IP_);
 	btrfs_might_wait_for_commit(fs_info);
 	spin_lock(&fs_info->trans_lock);
 	add_pending_snapshot(trans);
@@ -2514,7 +2512,6 @@ cleanup_transaction:
 	btrfs_warn(fs_info, "Skipping commit of aborted transaction.");
 	if (current->journal_info == trans)
 		current->journal_info = NULL;
-	rwsem_acquire_read(&fs_info->btrfs_trans_commit_map, 0, 0, _THIS_IP_);
 	cleanup_transaction(trans, ret);
 
 	return ret;
