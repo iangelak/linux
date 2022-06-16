@@ -317,6 +317,7 @@ loop:
 		atomic_inc(&cur_trans->num_writers);
 		extwriter_counter_inc(cur_trans, type);
 		spin_unlock(&fs_info->trans_lock);
+		rwsem_acquire_read(&fs_info->btrfs_trans_commit_map, 0, 0, _THIS_IP_);
 		return 0;
 	}
 	spin_unlock(&fs_info->trans_lock);
@@ -414,6 +415,7 @@ loop:
 	fs_info->running_transaction = cur_trans;
 	cur_trans->aborted = 0;
 	spin_unlock(&fs_info->trans_lock);
+	rwsem_acquire_read(&fs_info->btrfs_trans_commit_map, 0, 0, _THIS_IP_);
 
 	return 0;
 }
@@ -692,9 +694,7 @@ again:
 		wait_current_trans(fs_info);
 
 	do {
-		rwsem_acquire_read(&fs_info->btrfs_trans_commit_map, 0, 0, _THIS_IP_);
 		ret = join_transaction(fs_info, type);
-		rwsem_release(&fs_info->btrfs_trans_commit_map, _THIS_IP_);
 		if (ret == -EBUSY) {
 			wait_current_trans(fs_info);
 			if (unlikely(type == TRANS_ATTACH ||
@@ -1025,9 +1025,8 @@ static int __btrfs_end_transaction(struct btrfs_trans_handle *trans,
 
 	WARN_ON(cur_trans != info->running_transaction);
 	WARN_ON(atomic_read(&cur_trans->num_writers) < 1);
-	rwsem_acquire_read(&info->btrfs_trans_commit_map, 0, 0, _THIS_IP_);
-	atomic_dec(&cur_trans->num_writers);
 	rwsem_release(&info->btrfs_trans_commit_map, _THIS_IP_);
+	atomic_dec(&cur_trans->num_writers);
 	extwriter_counter_dec(cur_trans, trans->type);
 
 	cond_wake_up(&cur_trans->writer_wait);
@@ -2254,6 +2253,7 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 	if (ret)
 		goto cleanup_transaction;
 
+	rwsem_release(&fs_info->btrfs_trans_commit_map, _THIS_IP_);
 	btrfs_might_wait_for_commit(fs_info);
 	wait_event(cur_trans->writer_wait,
 		   extwriter_counter_read(cur_trans) == 0);

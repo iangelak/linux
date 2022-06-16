@@ -28,6 +28,7 @@
 #include <linux/iversion.h>
 #include <linux/fileattr.h>
 #include <linux/fsverity.h>
+#include <linux/delay.h>
 #include <linux/sched/xacct.h>
 #include "ctree.h"
 #include "disk-io.h"
@@ -50,6 +51,7 @@
 #include "delalloc-space.h"
 #include "block-group.h"
 #include "subpage.h"
+#include "misc.h"
 
 #ifdef CONFIG_64BIT
 /* If we have a 32-bit userspace and 64-bit kernel, then the UAPI
@@ -5415,6 +5417,34 @@ out_acct:
 	return ret;
 }
 
+static int btrfs_ioctl_test_a(struct btrfs_fs_info *fs_info)
+{
+	printk(KERN_INFO "In ioctl a\n");
+	rwsem_acquire_read(&fs_info->btrfs_trans_commit_map, 0, 0, _THIS_IP_);
+	atomic_set(&fs_info->test_cond, 0);
+	cond_wake_up(&fs_info->test_waiter);
+	mutex_lock(&fs_info->test_lock);
+	printk(KERN_INFO "In ioctl a' critical section\n");
+	atomic_inc(&fs_info->test_cond);
+	mutex_unlock(&fs_info->test_lock);
+	rwsem_release(&fs_info->btrfs_trans_commit_map, _THIS_IP_);
+
+	return 0;
+}
+
+static int btrfs_ioctl_test_b(struct btrfs_fs_info *fs_info)
+{
+	mutex_lock(&fs_info->test_lock);
+	btrfs_might_wait_for_commit(fs_info);
+	wait_event(fs_info->test_waiter,
+		atomic_read(&fs_info->test_cond) == 1);
+	printk(KERN_INFO "In ioctl b' critical section\n");
+	atomic_dec(&fs_info->test_cond);
+	mutex_unlock(&fs_info->test_lock);
+
+	return 0;
+}
+
 long btrfs_ioctl(struct file *file, unsigned int
 		cmd, unsigned long arg)
 {
@@ -5567,6 +5597,10 @@ long btrfs_ioctl(struct file *file, unsigned int
 	case BTRFS_IOC_ENCODED_WRITE_32:
 		return btrfs_ioctl_encoded_write(file, argp, true);
 #endif
+	case BTRFS_IOC_TEST1:
+		return btrfs_ioctl_test_a(fs_info);
+	case BTRFS_IOC_TEST2:
+		return btrfs_ioctl_test_b(fs_info);
 	}
 
 	return -ENOTTY;
