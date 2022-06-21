@@ -549,6 +549,7 @@ static void wait_current_trans(struct btrfs_fs_info *fs_info)
 	if (cur_trans && is_transaction_blocked(cur_trans)) {
 		refcount_inc(&cur_trans->use_count);
 		spin_unlock(&fs_info->trans_lock);
+		btrfs_might_wait_for_state(fs_info);
 		wait_event(fs_info->transaction_wait,
 			   cur_trans->state >= TRANS_STATE_UNBLOCKED ||
 			   TRANS_ABORTED(cur_trans));
@@ -2253,8 +2254,6 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 	if (ret)
 		goto cleanup_transaction;
 
-	rwsem_release(&fs_info->btrfs_trans_commit_map, _THIS_IP_);
-	btrfs_might_wait_for_commit(fs_info);
 	wait_event(cur_trans->writer_wait,
 		   extwriter_counter_read(cur_trans) == 0);
 
@@ -2279,6 +2278,7 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 	 * commit the transaction.  We could have started a join before setting
 	 * COMMIT_DOING so make sure to wait for num_writers to == 1 again.
 	 */
+	rwsem_release(&fs_info->btrfs_trans_commit_map, _THIS_IP_);
 	btrfs_might_wait_for_commit(fs_info);
 	spin_lock(&fs_info->trans_lock);
 	add_pending_snapshot(trans);
@@ -2421,6 +2421,7 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 	 * superblock. Anyone trying to commit a log tree locks this mutex before
 	 * writing its superblock.
 	 */
+	rwsem_acquire_read(&fs_info->btrfs_state_change_map, 0, 0, _THIS_IP_);
 	mutex_lock(&fs_info->tree_log_mutex);
 
 	spin_lock(&fs_info->trans_lock);
@@ -2436,6 +2437,7 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 		btrfs_handle_fs_error(fs_info, ret,
 				      "Error while writing out transaction");
 		mutex_unlock(&fs_info->tree_log_mutex);
+		rwsem_release(&fs_info->btrfs_state_change_map, _THIS_IP_);
 		goto scrub_continue;
 	}
 
@@ -2452,8 +2454,10 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 	 * to go about their business
 	 */
 	mutex_unlock(&fs_info->tree_log_mutex);
-	if (ret)
+	if (ret) {
+		rwsem_release(&fs_info->btrfs_state_change_map, _THIS_IP_);
 		goto scrub_continue;
+	}
 
 	/*
 	 * We needn't acquire the lock here because there is no other task
@@ -2485,6 +2489,7 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 	if (trans->type & __TRANS_FREEZABLE)
 		sb_end_intwrite(fs_info->sb);
 
+	rwsem_release(&fs_info->btrfs_state_change_map, _THIS_IP_);
 	trace_btrfs_transaction_commit(fs_info);
 
 	interval = ktime_get_ns() - start_time;
@@ -2503,6 +2508,7 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 unlock_reloc:
 	mutex_unlock(&fs_info->reloc_mutex);
 scrub_continue:
+	rwsem_release(&fs_info->btrfs_state_change_map, _THIS_IP_);
 	btrfs_scrub_continue(fs_info);
 cleanup_transaction:
 	btrfs_trans_release_metadata(trans);
