@@ -3040,7 +3040,7 @@ static inline void btrfs_remove_log_ctx(struct btrfs_root *root,
 	mutex_unlock(&root->log_mutex);
 }
 
-/* 
+/*
  * Invoked in log mutex context, or be sure there is no other task which
  * can access the list.
  */
@@ -7091,4 +7091,3 @@ out:
 	if (log_pinned)
 		btrfs_end_log_trans(root);
 }
-

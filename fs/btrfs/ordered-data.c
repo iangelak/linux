@@ -526,6 +526,7 @@ void btrfs_remove_ordered_extent(struct btrfs_inode *btrfs_inode,
 	bool pending;
 
 	/* This is paired with btrfs_add_ordered_extent. */
+	rwsem_acquire_read(&fs_info->btrfs_ord_extent_map, 0, 0, _THIS_IP_);
 	spin_lock(&btrfs_inode->lock);
 	btrfs_mod_outstanding_extents(btrfs_inode, -1);
 	spin_unlock(&btrfs_inode->lock);
@@ -593,6 +594,7 @@ void btrfs_remove_ordered_extent(struct btrfs_inode *btrfs_inode,
 		spin_unlock(&fs_info->ordered_root_lock);
 	}
 	spin_unlock(&root->ordered_extent_lock);
+	rwsem_release(&fs_info->btrfs_ord_extent_map, _THIS_IP_);
 	wake_up(&entry->wait);
 }
 
@@ -723,6 +725,7 @@ void btrfs_start_ordered_extent(struct btrfs_ordered_extent *entry, int wait)
 	if (!test_bit(BTRFS_ORDERED_DIRECT, &entry->flags))
 		filemap_fdatawrite_range(inode->vfs_inode.i_mapping, start, end);
 	if (wait) {
+		btrfs_might_wait_for_ord_extent(inode->root->fs_info);
 		wait_event(entry->wait, test_bit(BTRFS_ORDERED_COMPLETE,
 						 &entry->flags));
 	}

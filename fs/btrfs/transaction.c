@@ -292,11 +292,15 @@ static noinline int join_transaction(struct btrfs_fs_info *fs_info,
 	struct btrfs_transaction *cur_trans;
 
 	rwsem_acquire_read(&fs_info->btrfs_trans_commit_map, 0, 0, _THIS_IP_);
+	rwsem_acquire_read(&fs_info->btrfs_trans_pending_order_map, 0, 0, _THIS_IP_);
+	rwsem_acquire_read(&fs_info->btrfs_trans_ext_writers_map, 0, 0, _THIS_IP_);
 	spin_lock(&fs_info->trans_lock);
 loop:
 	/* The file system has been taken offline. No new transactions. */
 	if (BTRFS_FS_ERROR(fs_info)) {
 		spin_unlock(&fs_info->trans_lock);
+		rwsem_release(&fs_info->btrfs_trans_ext_writers_map, _THIS_IP_);
+		rwsem_release(&fs_info->btrfs_trans_pending_order_map, _THIS_IP_);
 		rwsem_release(&fs_info->btrfs_trans_commit_map, _THIS_IP_);
 		return -EROFS;
 	}
@@ -305,11 +309,15 @@ loop:
 	if (cur_trans) {
 		if (TRANS_ABORTED(cur_trans)) {
 			spin_unlock(&fs_info->trans_lock);
+			rwsem_release(&fs_info->btrfs_trans_ext_writers_map, _THIS_IP_);
+			rwsem_release(&fs_info->btrfs_trans_pending_order_map, _THIS_IP_);
 			rwsem_release(&fs_info->btrfs_trans_commit_map, _THIS_IP_);
 			return cur_trans->aborted;
 		}
 		if (btrfs_blocked_trans_types[cur_trans->state] & type) {
 			spin_unlock(&fs_info->trans_lock);
+			rwsem_release(&fs_info->btrfs_trans_ext_writers_map, _THIS_IP_);
+			rwsem_release(&fs_info->btrfs_trans_pending_order_map, _THIS_IP_);
 			rwsem_release(&fs_info->btrfs_trans_commit_map, _THIS_IP_);
 			return -EBUSY;
 		}
@@ -317,7 +325,6 @@ loop:
 		atomic_inc(&cur_trans->num_writers);
 		extwriter_counter_inc(cur_trans, type);
 		spin_unlock(&fs_info->trans_lock);
-		rwsem_acquire_read(&fs_info->btrfs_trans_commit_map, 0, 0, _THIS_IP_);
 		return 0;
 	}
 	spin_unlock(&fs_info->trans_lock);
@@ -327,6 +334,8 @@ loop:
 	 * and commit it. If there is no transaction, just return ENOENT.
 	 */
 	if (type == TRANS_ATTACH) {
+		rwsem_release(&fs_info->btrfs_trans_ext_writers_map, _THIS_IP_);
+		rwsem_release(&fs_info->btrfs_trans_pending_order_map, _THIS_IP_);
 		rwsem_release(&fs_info->btrfs_trans_commit_map, _THIS_IP_);
 		return -ENOENT;
 	}
@@ -339,6 +348,8 @@ loop:
 
 	cur_trans = kmalloc(sizeof(*cur_trans), GFP_NOFS);
 	if (!cur_trans){
+		rwsem_release(&fs_info->btrfs_trans_ext_writers_map, _THIS_IP_);
+		rwsem_release(&fs_info->btrfs_trans_pending_order_map, _THIS_IP_);
 		rwsem_release(&fs_info->btrfs_trans_commit_map, _THIS_IP_);
 		return -ENOMEM;
 	}
@@ -353,6 +364,8 @@ loop:
 		goto loop;
 	} else if (BTRFS_FS_ERROR(fs_info)) {
 		spin_unlock(&fs_info->trans_lock);
+		rwsem_release(&fs_info->btrfs_trans_ext_writers_map, _THIS_IP_);
+		rwsem_release(&fs_info->btrfs_trans_pending_order_map, _THIS_IP_);
 		rwsem_release(&fs_info->btrfs_trans_commit_map, _THIS_IP_);
 		kfree(cur_trans);
 		return -EROFS;
@@ -415,7 +428,6 @@ loop:
 	fs_info->running_transaction = cur_trans;
 	cur_trans->aborted = 0;
 	spin_unlock(&fs_info->trans_lock);
-	rwsem_acquire_read(&fs_info->btrfs_trans_commit_map, 0, 0, _THIS_IP_);
 
 	return 0;
 }
@@ -549,7 +561,7 @@ static void wait_current_trans(struct btrfs_fs_info *fs_info)
 	if (cur_trans && is_transaction_blocked(cur_trans)) {
 		refcount_inc(&cur_trans->use_count);
 		spin_unlock(&fs_info->trans_lock);
-		btrfs_might_wait_for_state(fs_info);
+		btrfs_might_wait_for_state(fs_info, 1);
 		wait_event(fs_info->transaction_wait,
 			   cur_trans->state >= TRANS_STATE_UNBLOCKED ||
 			   TRANS_ABORTED(cur_trans));
@@ -948,6 +960,7 @@ int btrfs_wait_for_commit(struct btrfs_fs_info *fs_info, u64 transid)
 			goto out;  /* nothing committing|committed */
 	}
 
+	btrfs_might_wait_for_state(fs_info, 3);
 	wait_for_commit(cur_trans, TRANS_STATE_COMPLETED);
 	btrfs_put_transaction(cur_trans);
 out:
@@ -1026,6 +1039,8 @@ static int __btrfs_end_transaction(struct btrfs_trans_handle *trans,
 
 	WARN_ON(cur_trans != info->running_transaction);
 	WARN_ON(atomic_read(&cur_trans->num_writers) < 1);
+	rwsem_release(&info->btrfs_trans_ext_writers_map, _THIS_IP_);
+	rwsem_release(&info->btrfs_trans_pending_order_map, _THIS_IP_);
 	rwsem_release(&info->btrfs_trans_commit_map, _THIS_IP_);
 	atomic_dec(&cur_trans->num_writers);
 	extwriter_counter_dec(cur_trans, trans->type);
@@ -1965,6 +1980,7 @@ void btrfs_commit_transaction_async(struct btrfs_trans_handle *trans)
 	 * Wait for the current transaction commit to start and block
 	 * subsequent transaction joins
 	 */
+	btrfs_might_wait_for_state(fs_info, 0);
 	wait_event(fs_info->transaction_blocked_wait,
 		   cur_trans->state >= TRANS_STATE_COMMIT_START ||
 		   TRANS_ABORTED(cur_trans));
@@ -1991,8 +2007,8 @@ static void cleanup_transaction(struct btrfs_trans_handle *trans, int err)
 
 	if (cur_trans == fs_info->running_transaction) {
 		cur_trans->state = TRANS_STATE_COMMIT_DOING;
-		btrfs_might_wait_for_commit(fs_info);
 		spin_unlock(&fs_info->trans_lock);
+		btrfs_might_wait_for_commit(fs_info);
 		wait_event(cur_trans->writer_wait,
 			   atomic_read(&cur_trans->num_writers) == 1);
 		spin_lock(&fs_info->trans_lock);
@@ -2177,6 +2193,7 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 		}
 	}
 
+	rwsem_acquire_read(&fs_info->btrfs_state_change_map[0], 0, 0, _THIS_IP_);
 	spin_lock(&fs_info->trans_lock);
 	if (cur_trans->state >= TRANS_STATE_COMMIT_START) {
 		enum btrfs_trans_state want_state = TRANS_STATE_COMPLETED;
@@ -2184,11 +2201,14 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 		add_pending_snapshot(trans);
 
 		spin_unlock(&fs_info->trans_lock);
+		rwsem_release(&fs_info->btrfs_state_change_map[0], _THIS_IP_);
 		refcount_inc(&cur_trans->use_count);
 
 		if (trans->in_fsync)
 			want_state = TRANS_STATE_SUPER_COMMITTED;
 		ret = btrfs_end_transaction(trans);
+		btrfs_might_wait_for_state(fs_info, 2);
+		btrfs_might_wait_for_state(fs_info, 3);
 		wait_for_commit(cur_trans, want_state);
 
 		if (TRANS_ABORTED(cur_trans))
@@ -2214,13 +2234,17 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 			refcount_inc(&prev_trans->use_count);
 			spin_unlock(&fs_info->trans_lock);
 
+			btrfs_might_wait_for_state(fs_info, 2);
+			btrfs_might_wait_for_state(fs_info, 3);
 			wait_for_commit(prev_trans, want_state);
 
 			ret = READ_ONCE(prev_trans->aborted);
 
 			btrfs_put_transaction(prev_trans);
-			if (ret)
+			if (ret) {
+				rwsem_release(&fs_info->btrfs_state_change_map[0], _THIS_IP_);
 				goto cleanup_transaction;
+			}
 		} else {
 			spin_unlock(&fs_info->trans_lock);
 		}
@@ -2234,6 +2258,7 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 		 */
 		if (BTRFS_FS_ERROR(fs_info)) {
 			ret = -EROFS;
+			rwsem_release(&fs_info->btrfs_state_change_map[0], _THIS_IP_);
 			goto cleanup_transaction;
 		}
 	}
@@ -2247,20 +2272,28 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 	extwriter_counter_dec(cur_trans, trans->type);
 
 	ret = btrfs_start_delalloc_flush(fs_info);
-	if (ret)
+	if (ret) {
+		rwsem_release(&fs_info->btrfs_state_change_map[0], _THIS_IP_);
 		goto cleanup_transaction;
+	}
 
 	ret = btrfs_run_delayed_items(trans);
-	if (ret)
+	if (ret) {
+		rwsem_release(&fs_info->btrfs_state_change_map[0], _THIS_IP_);
 		goto cleanup_transaction;
+	}
 
+	rwsem_release(&fs_info->btrfs_state_change_map[0], _THIS_IP_);
+	rwsem_release(&fs_info->btrfs_trans_ext_writers_map, _THIS_IP_);
+	btrfs_might_wait_for_ext_writers(fs_info);
 	wait_event(cur_trans->writer_wait,
 		   extwriter_counter_read(cur_trans) == 0);
 
 	/* some pending stuffs might be added after the previous flush. */
 	ret = btrfs_run_delayed_items(trans);
-	if (ret)
+	if (ret) {
 		goto cleanup_transaction;
+	}
 
 	btrfs_wait_delalloc_flush(fs_info);
 
@@ -2269,6 +2302,8 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 	 * transaction. Otherwise if this transaction commits before the ordered
 	 * extents complete we lose logged data after a power failure.
 	 */
+	rwsem_release(&fs_info->btrfs_trans_pending_order_map, _THIS_IP_);
+	btrfs_might_wait_for_pending_order(fs_info);
 	wait_event(cur_trans->pending_wait,
 		   atomic_read(&cur_trans->pending_ordered) == 0);
 
@@ -2278,12 +2313,12 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 	 * commit the transaction.  We could have started a join before setting
 	 * COMMIT_DOING so make sure to wait for num_writers to == 1 again.
 	 */
-	rwsem_release(&fs_info->btrfs_trans_commit_map, _THIS_IP_);
-	btrfs_might_wait_for_commit(fs_info);
 	spin_lock(&fs_info->trans_lock);
 	add_pending_snapshot(trans);
 	cur_trans->state = TRANS_STATE_COMMIT_DOING;
 	spin_unlock(&fs_info->trans_lock);
+	rwsem_release(&fs_info->btrfs_trans_commit_map, _THIS_IP_);
+	btrfs_might_wait_for_commit(fs_info);
 	wait_event(cur_trans->writer_wait,
 		   atomic_read(&cur_trans->num_writers) == 1);
 
@@ -2421,7 +2456,7 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 	 * superblock. Anyone trying to commit a log tree locks this mutex before
 	 * writing its superblock.
 	 */
-	rwsem_acquire_read(&fs_info->btrfs_state_change_map, 0, 0, _THIS_IP_);
+	rwsem_acquire_read(&fs_info->btrfs_state_change_map[1], 0, 0, _THIS_IP_);
 	mutex_lock(&fs_info->tree_log_mutex);
 
 	spin_lock(&fs_info->trans_lock);
@@ -2437,7 +2472,6 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 		btrfs_handle_fs_error(fs_info, ret,
 				      "Error while writing out transaction");
 		mutex_unlock(&fs_info->tree_log_mutex);
-		rwsem_release(&fs_info->btrfs_state_change_map, _THIS_IP_);
 		goto scrub_continue;
 	}
 
@@ -2455,7 +2489,6 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 	 */
 	mutex_unlock(&fs_info->tree_log_mutex);
 	if (ret) {
-		rwsem_release(&fs_info->btrfs_state_change_map, _THIS_IP_);
 		goto scrub_continue;
 	}
 
@@ -2463,6 +2496,8 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 	 * We needn't acquire the lock here because there is no other task
 	 * which can change it.
 	 */
+	rwsem_release(&fs_info->btrfs_state_change_map[1], _THIS_IP_);
+	rwsem_acquire_read(&fs_info->btrfs_state_change_map[2], 0, 0, _THIS_IP_);
 	cur_trans->state = TRANS_STATE_SUPER_COMMITTED;
 	wake_up(&cur_trans->commit_wait);
 
@@ -2476,6 +2511,8 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 	 * We needn't acquire the lock here because there is no other task
 	 * which can change it.
 	 */
+	rwsem_release(&fs_info->btrfs_state_change_map[2], _THIS_IP_);
+	rwsem_acquire_read(&fs_info->btrfs_state_change_map[3], 0, 0, _THIS_IP_);
 	cur_trans->state = TRANS_STATE_COMPLETED;
 	wake_up(&cur_trans->commit_wait);
 
@@ -2489,7 +2526,6 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 	if (trans->type & __TRANS_FREEZABLE)
 		sb_end_intwrite(fs_info->sb);
 
-	rwsem_release(&fs_info->btrfs_state_change_map, _THIS_IP_);
 	trace_btrfs_transaction_commit(fs_info);
 
 	interval = ktime_get_ns() - start_time;
@@ -2503,12 +2539,13 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 
 	update_commit_stats(fs_info, interval);
 
+	rwsem_release(&fs_info->btrfs_state_change_map[3], _THIS_IP_);
 	return ret;
 
 unlock_reloc:
 	mutex_unlock(&fs_info->reloc_mutex);
 scrub_continue:
-	rwsem_release(&fs_info->btrfs_state_change_map, _THIS_IP_);
+	rwsem_release(&fs_info->btrfs_state_change_map[1], _THIS_IP_);
 	btrfs_scrub_continue(fs_info);
 cleanup_transaction:
 	btrfs_trans_release_metadata(trans);

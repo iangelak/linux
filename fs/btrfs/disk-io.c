@@ -3026,6 +3026,9 @@ static int __cold init_tree_roots(struct btrfs_fs_info *fs_info)
 void btrfs_init_fs_info(struct btrfs_fs_info *fs_info)
 {
 	static struct lock_class_key btrfs_trans_commit_key;
+	static struct lock_class_key btrfs_trans_pending_order_key;
+	static struct lock_class_key btrfs_trans_ext_writers_key;
+	static struct lock_class_key btrfs_ord_extent_key;
 	static struct lock_class_key btrfs_trans_start_key;
 	static struct lock_class_key btrfs_trans_unblocked_key;
 	static struct lock_class_key btrfs_trans_sup_committed_key;
@@ -3147,8 +3150,14 @@ void btrfs_init_fs_info(struct btrfs_fs_info *fs_info)
 	spin_lock_init(&fs_info->swapfile_pins_lock);
 	fs_info->swapfile_pins = RB_ROOT;
 
-	lockdep_init_map(&fs_info->btrfs_trans_commit_map, "btrfs_trans",
+	lockdep_init_map(&fs_info->btrfs_trans_commit_map, "btrfs_trans_commit",
                      &btrfs_trans_commit_key, 0);
+	lockdep_init_map(&fs_info->btrfs_trans_pending_order_map, "btrfs_trans_pending_order",
+                     &btrfs_trans_pending_order_key, 0);
+	lockdep_init_map(&fs_info->btrfs_trans_ext_writers_map, "btrfs_trans_ext_writers",
+                     &btrfs_trans_ext_writers_key, 0);
+	lockdep_init_map(&fs_info->btrfs_ord_extent_map, "btrfs_ord_extent",
+                     &btrfs_ord_extent_key, 0);
 	lockdep_init_map(&fs_info->btrfs_state_change_map[0], "btrfs_trans_start",
                      &btrfs_trans_start_key, 0);
 	lockdep_init_map(&fs_info->btrfs_state_change_map[1], "btrfs_trans_unblocked",

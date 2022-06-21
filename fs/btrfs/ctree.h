@@ -1107,7 +1107,10 @@ struct btrfs_fs_info {
 
 #ifdef CONFIG_DEBUG_LOCK_ALLOC
         struct lockdep_map      btrfs_trans_commit_map;
+        struct lockdep_map      btrfs_trans_pending_order_map;
+        struct lockdep_map      btrfs_trans_ext_writers_map;
         struct lockdep_map      btrfs_state_change_map[4];
+        struct lockdep_map      btrfs_ord_extent_map;
 #endif
 
 	atomic_t test_cond;
@@ -1539,6 +1542,24 @@ do {									\
 	do { \
 		rwsem_acquire(&b->btrfs_trans_commit_map, 0, 0, _THIS_IP_); \
 		rwsem_release(&b->btrfs_trans_commit_map, _THIS_IP_); \
+	} while (0)
+
+#define btrfs_might_wait_for_pending_order(b) \
+	do { \
+		rwsem_acquire(&b->btrfs_trans_pending_order_map, 0, 0, _THIS_IP_); \
+		rwsem_release(&b->btrfs_trans_pending_order_map, _THIS_IP_); \
+	} while (0)
+
+#define btrfs_might_wait_for_ext_writers(b) \
+	do { \
+		rwsem_acquire(&b->btrfs_trans_ext_writers_map, 0, 0, _THIS_IP_); \
+		rwsem_release(&b->btrfs_trans_ext_writers_map, _THIS_IP_); \
+	} while (0)
+
+#define btrfs_might_wait_for_ord_extent(b) \
+	do { \
+		rwsem_acquire(&b->btrfs_ord_extent_map, 0, 0, _THIS_IP_); \
+		rwsem_release(&b->btrfs_ord_extent_map, _THIS_IP_); \
 	} while (0)
 
 #define btrfs_might_wait_for_state(b, i) \
