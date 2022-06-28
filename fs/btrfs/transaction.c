@@ -2275,6 +2275,7 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 	 * commit the transaction.  We could have started a join before setting
 	 * COMMIT_DOING so make sure to wait for num_writers to == 1 again.
 	 */
+	mutex_lock(&fs_info->test_lock);
 	spin_lock(&fs_info->trans_lock);
 	add_pending_snapshot(trans);
 	cur_trans->state = TRANS_STATE_COMMIT_DOING;
@@ -2284,6 +2285,7 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 	wait_event(cur_trans->writer_wait,
 		   atomic_read(&cur_trans->num_writers) == 1);
 
+	mutex_unlock(&fs_info->test_lock);
 	/*
 	 * We've started the commit, clear the flag in case we were triggered to
 	 * do an async commit but somebody else started before the transaction

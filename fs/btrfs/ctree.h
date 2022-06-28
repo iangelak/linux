@@ -1109,6 +1109,10 @@ struct btrfs_fs_info {
         struct lockdep_map      btrfs_trans_num_writers_map;
 #endif
 
+	atomic_t test_cond;
+	struct mutex test_lock;
+	wait_queue_head_t test_waiter;
+
 };
 
 static inline struct btrfs_fs_info *btrfs_sb(struct super_block *sb)
