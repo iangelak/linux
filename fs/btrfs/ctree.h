@@ -1096,6 +1096,8 @@ struct btrfs_fs_info {
 	/* Updates are not protected by any lock */
 	struct btrfs_commit_stats commit_stats;
 
+	struct lockdep_map btrfs_trans_num_writers_map;
+
 #ifdef CONFIG_BTRFS_FS_REF_VERIFY
 	spinlock_t ref_verify_lock;
 	struct rb_root block_tree;
@@ -1176,6 +1178,18 @@ enum {
 	/* This root has a drop operation that was started previously. */
 	BTRFS_ROOT_UNFINISHED_DROP,
 };
+
+#define btrfs_might_wait_for_event(b, lock) \
+	do { \
+		rwsem_acquire(&b->lock##_map, 0, 0, _THIS_IP_); \
+		rwsem_release(&b->lock##_map, _THIS_IP_); \
+	} while (0)
+
+#define btrfs_lockdep_acquire(b, lock) \
+	rwsem_acquire_read(&b->lock##_map, 0, 0, _THIS_IP_)
+
+#define btrfs_lockdep_release(b, lock) \
+	rwsem_release(&b->lock##_map, _THIS_IP_)
 
 static inline void btrfs_wake_unfinished_drop(struct btrfs_fs_info *fs_info)
 {
