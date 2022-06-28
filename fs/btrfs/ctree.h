@@ -1104,6 +1104,11 @@ struct btrfs_fs_info {
 	spinlock_t eb_leak_lock;
 	struct list_head allocated_ebs;
 #endif
+
+#ifdef CONFIG_DEBUG_LOCK_ALLOC
+        struct lockdep_map      btrfs_state_change_map[4];
+#endif
+
 };
 
 static inline struct btrfs_fs_info *btrfs_sb(struct super_block *sb)
@@ -1524,6 +1529,12 @@ do {									\
 		btrfs_info(fs_info, fmt, ##args);			\
 	btrfs_clear_opt(fs_info->mount_opt, opt);			\
 } while (0)
+
+#define btrfs_might_wait_for_state(b, i) \
+	do { \
+		rwsem_acquire(&b->btrfs_state_change_map[i], 0, 0, _THIS_IP_); \
+		rwsem_release(&b->btrfs_state_change_map[i], _THIS_IP_); \
+	} while (0)
 
 /*
  * Requests for changes that need to be done during transaction commit.

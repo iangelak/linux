@@ -538,7 +538,7 @@ static void wait_current_trans(struct btrfs_fs_info *fs_info)
 	if (cur_trans && is_transaction_blocked(cur_trans)) {
 		refcount_inc(&cur_trans->use_count);
 		spin_unlock(&fs_info->trans_lock);
-
+		btrfs_might_wait_for_state(fs_info, 1);
 		wait_event(fs_info->transaction_wait,
 			   cur_trans->state >= TRANS_STATE_UNBLOCKED ||
 			   TRANS_ABORTED(cur_trans));
@@ -675,7 +675,7 @@ again:
 	 * and then we deadlock with somebody doing a freeze.
 	 *
 	 * If we are ATTACH, it means we just want to catch the current
-	 * transaction and commit it, so we needn't do sb_start_intwrite(). 
+	 * transaction and commit it, so we needn't do sb_start_intwrite().
 	 */
 	if (type & __TRANS_FREEZABLE)
 		sb_start_intwrite(fs_info->sb);
@@ -938,6 +938,7 @@ int btrfs_wait_for_commit(struct btrfs_fs_info *fs_info, u64 transid)
 			goto out;  /* nothing committing|committed */
 	}
 
+	btrfs_might_wait_for_state(fs_info, 3);
 	wait_for_commit(cur_trans, TRANS_STATE_COMPLETED);
 	btrfs_put_transaction(cur_trans);
 out:
@@ -1953,6 +1954,7 @@ void btrfs_commit_transaction_async(struct btrfs_trans_handle *trans)
 	 * Wait for the current transaction commit to start and block
 	 * subsequent transaction joins
 	 */
+	btrfs_might_wait_for_state(fs_info, 0);
 	wait_event(fs_info->transaction_blocked_wait,
 		   cur_trans->state >= TRANS_STATE_COMMIT_START ||
 		   TRANS_ABORTED(cur_trans));
@@ -2177,6 +2179,8 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 		if (trans->in_fsync)
 			want_state = TRANS_STATE_SUPER_COMMITTED;
 		ret = btrfs_end_transaction(trans);
+		btrfs_might_wait_for_state(fs_info, 2);
+		btrfs_might_wait_for_state(fs_info, 3);
 		wait_for_commit(cur_trans, want_state);
 
 		if (TRANS_ABORTED(cur_trans))
@@ -2202,6 +2206,8 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 			refcount_inc(&prev_trans->use_count);
 			spin_unlock(&fs_info->trans_lock);
 
+			btrfs_might_wait_for_state(fs_info, 2);
+			btrfs_might_wait_for_state(fs_info, 3);
 			wait_for_commit(prev_trans, want_state);
 
 			ret = READ_ONCE(prev_trans->aborted);
@@ -2260,6 +2266,9 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 	wait_event(cur_trans->pending_wait,
 		   atomic_read(&cur_trans->pending_ordered) == 0);
 
+	rwsem_acquire_read(&fs_info->btrfs_state_change_map[1], 0, 0, _THIS_IP_);
+	rwsem_acquire_read(&fs_info->btrfs_state_change_map[2], 0, 0, _THIS_IP_);
+	rwsem_acquire_read(&fs_info->btrfs_state_change_map[3], 0, 0, _THIS_IP_);
 	btrfs_scrub_pause(fs_info);
 	/*
 	 * Ok now we need to make sure to block out any other joins while we
@@ -2445,6 +2454,7 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 	 * We needn't acquire the lock here because there is no other task
 	 * which can change it.
 	 */
+	rwsem_release(&fs_info->btrfs_state_change_map[1], _THIS_IP_);
 	cur_trans->state = TRANS_STATE_SUPER_COMMITTED;
 	wake_up(&cur_trans->commit_wait);
 
@@ -2458,6 +2468,7 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 	 * We needn't acquire the lock here because there is no other task
 	 * which can change it.
 	 */
+	rwsem_release(&fs_info->btrfs_state_change_map[2], _THIS_IP_);
 	cur_trans->state = TRANS_STATE_COMPLETED;
 	wake_up(&cur_trans->commit_wait);
 
@@ -2484,11 +2495,15 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 
 	update_commit_stats(fs_info, interval);
 
+	rwsem_release(&fs_info->btrfs_state_change_map[3], _THIS_IP_);
 	return ret;
 
 unlock_reloc:
 	mutex_unlock(&fs_info->reloc_mutex);
 scrub_continue:
+	rwsem_release(&fs_info->btrfs_state_change_map[1], _THIS_IP_);
+	rwsem_release(&fs_info->btrfs_state_change_map[2], _THIS_IP_);
+	rwsem_release(&fs_info->btrfs_state_change_map[3], _THIS_IP_);
 	btrfs_scrub_continue(fs_info);
 cleanup_transaction:
 	btrfs_trans_release_metadata(trans);
