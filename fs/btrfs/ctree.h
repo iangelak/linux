@@ -1104,6 +1104,7 @@ struct btrfs_fs_info {
 	spinlock_t eb_leak_lock;
 	struct list_head allocated_ebs;
 #endif
+
 };
 
 static inline struct btrfs_fs_info *btrfs_sb(struct super_block *sb)
