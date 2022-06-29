@@ -96,6 +96,10 @@ struct btrfs_transaction {
 
 	spinlock_t releasing_ebs_lock;
 	struct list_head releasing_ebs;
+
+	#ifdef CONFIG_DEBUG_LOCK_ALLOC
+        struct lockdep_map      btrfs_state_change_map[4];
+	#endif
 };
 
 #define __TRANS_FREEZABLE	(1U << 0)
@@ -166,6 +170,13 @@ struct btrfs_pending_snapshot {
 	bool readonly;
 	struct list_head list;
 };
+
+
+#define btrfs_might_wait_for_state(b, i) \
+	do { \
+		rwsem_acquire(&b->btrfs_state_change_map[i], 0, 0, _THIS_IP_); \
+		rwsem_release(&b->btrfs_state_change_map[i], _THIS_IP_); \
+	} while (0)
 
 static inline void btrfs_set_inode_last_trans(struct btrfs_trans_handle *trans,
 					      struct btrfs_inode *inode)
