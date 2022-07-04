@@ -291,6 +291,7 @@ static noinline int join_transaction(struct btrfs_fs_info *fs_info,
 {
 	struct btrfs_transaction *cur_trans;
 	static struct lock_class_key btrfs_trans_num_writers_key;
+	static struct lock_class_key btrfs_trans_pending_ordered_key;
 
 	spin_lock(&fs_info->trans_lock);
 loop:
@@ -340,8 +341,11 @@ loop:
 
 	lockdep_init_map(&cur_trans->btrfs_trans_num_writers_map, "btrfs_trans_num_writers",
                      &btrfs_trans_num_writers_key, 0);
+	lockdep_init_map(&cur_trans->btrfs_trans_pending_ordered_map, "btrfs_trans_pending_ordered",
+                     &btrfs_trans_pending_ordered_key, 0);
 
 	rwsem_acquire_read(&cur_trans->btrfs_trans_num_writers_map, 0, 0, _THIS_IP_);
+	rwsem_acquire_read(&cur_trans->btrfs_trans_pending_ordered_map, 0, 0, _THIS_IP_);
 
 	spin_lock(&fs_info->trans_lock);
 	if (fs_info->running_transaction) {
@@ -349,11 +353,13 @@ loop:
 		 * someone started a transaction after we unlocked.  Make sure
 		 * to redo the checks above
 		 */
+		rwsem_release(&cur_trans->btrfs_trans_pending_ordered_map, _THIS_IP_);
 		rwsem_release(&cur_trans->btrfs_trans_num_writers_map, _THIS_IP_);
 		kfree(cur_trans);
 		goto loop;
 	} else if (BTRFS_FS_ERROR(fs_info)) {
 		spin_unlock(&fs_info->trans_lock);
+		rwsem_release(&cur_trans->btrfs_trans_pending_ordered_map, _THIS_IP_);
 		rwsem_release(&cur_trans->btrfs_trans_num_writers_map, _THIS_IP_);
 		kfree(cur_trans);
 		return -EROFS;
@@ -416,6 +422,7 @@ loop:
 	fs_info->running_transaction = cur_trans;
 	cur_trans->aborted = 0;
 	spin_unlock(&fs_info->trans_lock);
+	rwsem_release(&cur_trans->btrfs_trans_pending_ordered_map, _THIS_IP_);
 
 	return 0;
 }
@@ -2269,6 +2276,7 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 	 * transaction. Otherwise if this transaction commits before the ordered
 	 * extents complete we lose logged data after a power failure.
 	 */
+	btrfs_might_wait_for_pending_ordered(cur_trans);
 	wait_event(cur_trans->pending_wait,
 		   atomic_read(&cur_trans->pending_ordered) == 0);
 

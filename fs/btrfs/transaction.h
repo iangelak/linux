@@ -98,6 +98,7 @@ struct btrfs_transaction {
 	struct list_head releasing_ebs;
 
     struct lockdep_map btrfs_trans_num_writers_map;
+    struct lockdep_map btrfs_trans_pending_ordered_map;
 
 };
 
@@ -174,6 +175,12 @@ struct btrfs_pending_snapshot {
 	do { \
 		rwsem_acquire(&b->btrfs_trans_num_writers_map, 0, 0, _THIS_IP_); \
 		rwsem_release(&b->btrfs_trans_num_writers_map, _THIS_IP_); \
+	} while (0)
+
+#define btrfs_might_wait_for_pending_ordered(b) \
+	do { \
+		rwsem_acquire(&b->btrfs_trans_pending_ordered_map, 0, 0, _THIS_IP_); \
+		rwsem_release(&b->btrfs_trans_pending_ordered_map, _THIS_IP_); \
 	} while (0)
 
 static inline void btrfs_set_inode_last_trans(struct btrfs_trans_handle *trans,

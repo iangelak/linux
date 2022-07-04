@@ -3040,7 +3040,7 @@ static inline void btrfs_remove_log_ctx(struct btrfs_root *root,
 	mutex_unlock(&root->log_mutex);
 }
 
-/* 
+/*
  * Invoked in log mutex context, or be sure there is no other task which
  * can access the list.
  */
@@ -5023,6 +5023,7 @@ process:
 	 * lose data if an ordered extents completes after the transaction
 	 * commits and a power failure happens after the transaction commit.
 	 */
+	rwsem_acquire_read(&trans->transaction->btrfs_trans_pending_ordered_map, 0, 0, _THIS_IP_);
 	list_for_each_entry_safe(ordered, tmp, &ctx->ordered_extents, log_list) {
 		list_del_init(&ordered->log_list);
 		set_bit(BTRFS_ORDERED_LOGGED, &ordered->flags);
@@ -5038,6 +5039,7 @@ process:
 		btrfs_put_ordered_extent(ordered);
 	}
 
+	rwsem_release(&trans->transaction->btrfs_trans_pending_ordered_map, _THIS_IP_);
 	return 0;
 }
 
@@ -7091,4 +7093,3 @@ out:
 	if (log_pinned)
 		btrfs_end_log_trans(root);
 }
-

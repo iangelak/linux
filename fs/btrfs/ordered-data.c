@@ -573,11 +573,13 @@ void btrfs_remove_ordered_extent(struct btrfs_inode *btrfs_inode,
 		spin_unlock(&fs_info->trans_lock);
 
 		ASSERT(trans);
+		rwsem_acquire_read(&trans->btrfs_trans_pending_ordered_map, 0, 0, _THIS_IP_);
 		if (trans) {
 			if (atomic_dec_and_test(&trans->pending_ordered))
 				wake_up(&trans->pending_wait);
 			btrfs_put_transaction(trans);
 		}
+		rwsem_release(&trans->btrfs_trans_pending_ordered_map, _THIS_IP_);
 	}
 
 	spin_lock(&root->ordered_extent_lock);
