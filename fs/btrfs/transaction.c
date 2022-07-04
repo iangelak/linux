@@ -2296,6 +2296,7 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 	 * transaction. Otherwise if this transaction commits before the ordered
 	 * extents complete we lose logged data after a power failure.
 	 */
+	btrfs_might_wait_for_event(fs_info, btrfs_trans_pending_ordered);
 	wait_event(cur_trans->pending_wait,
 		   atomic_read(&cur_trans->pending_ordered) == 0);
 
@@ -2315,7 +2316,7 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 	 * map as a reader. It has to release it before acquiring the lockdep map
 	 * as a writer.
 	 */
-	btrfs_lockdep_release(fs_info, btrfs_trans_num_writers);
+
 	btrfs_might_wait_for_event(fs_info, btrfs_trans_num_writers);
 	wait_event(cur_trans->writer_wait,
 		   atomic_read(&cur_trans->num_writers) == 1);
