@@ -3032,6 +3032,7 @@ static int __cold init_tree_roots(struct btrfs_fs_info *fs_info)
 void btrfs_init_fs_info(struct btrfs_fs_info *fs_info)
 {
 	static struct lock_class_key btrfs_trans_num_writers_key;
+	static struct lock_class_key btrfs_trans_num_extwriters_key;
 
 	xa_init_flags(&fs_info->fs_roots, GFP_ATOMIC);
 	xa_init_flags(&fs_info->extent_buffers, GFP_ATOMIC);
@@ -3064,6 +3065,9 @@ void btrfs_init_fs_info(struct btrfs_fs_info *fs_info)
 	lockdep_init_map(&fs_info->btrfs_trans_num_writers_map,
 					 "btrfs_trans_num_writers",
 					 &btrfs_trans_num_writers_key, 0);
+	lockdep_init_map(&fs_info->btrfs_trans_num_extwriters_map,
+					 "btrfs_trans_num_extwriters",
+					 &btrfs_trans_num_extwriters_key, 0);
 
 	INIT_LIST_HEAD(&fs_info->dirty_cowonly_roots);
 	INIT_LIST_HEAD(&fs_info->space_info);
