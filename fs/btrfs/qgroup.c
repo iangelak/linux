@@ -1142,7 +1142,6 @@ out_add_root:
 		goto out_free_path;
 	}
 
-	mutex_unlock(&fs_info->qgroup_ioctl_lock);
 	spin_lock(&fs_info->qgroup_lock);
 	fs_info->quota_root = quota_root;
 	set_bit(BTRFS_FS_QUOTA_ENABLED, &fs_info->flags);
@@ -1158,7 +1157,6 @@ out_add_root:
 	 */
 	ret = btrfs_commit_transaction(trans);
 	trans = NULL;
-	mutex_lock(&fs_info->qgroup_ioctl_lock);
 	if (ret)
 		goto out_free_path;
 
