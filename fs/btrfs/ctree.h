@@ -1099,6 +1099,7 @@ struct btrfs_fs_info {
 	struct lockdep_map btrfs_trans_num_writers_map;
 	struct lockdep_map btrfs_trans_num_extwriters_map;
 	struct lockdep_map btrfs_trans_pending_ordered_map;
+    struct lockdep_map btrfs_state_change_map[4];
 
 #ifdef CONFIG_BTRFS_FS_REF_VERIFY
 	spinlock_t ref_verify_lock;
@@ -1192,6 +1193,12 @@ enum {
 
 #define btrfs_lockdep_release(b, lock) \
 	rwsem_release(&b->lock##_map, _THIS_IP_)
+
+#define btrfs_might_wait_for_state(b, i) \
+	do { \
+		rwsem_acquire(&b->btrfs_state_change_map[i], 0, 0, _THIS_IP_); \
+		rwsem_release(&b->btrfs_state_change_map[i], _THIS_IP_); \
+	} while (0)
 
 static inline void btrfs_wake_unfinished_drop(struct btrfs_fs_info *fs_info)
 {

@@ -548,6 +548,7 @@ static void wait_current_trans(struct btrfs_fs_info *fs_info)
 		refcount_inc(&cur_trans->use_count);
 		spin_unlock(&fs_info->trans_lock);
 
+		btrfs_might_wait_for_state(fs_info, 1);
 		wait_event(fs_info->transaction_wait,
 			   cur_trans->state >= TRANS_STATE_UNBLOCKED ||
 			   TRANS_ABORTED(cur_trans));
@@ -947,6 +948,7 @@ int btrfs_wait_for_commit(struct btrfs_fs_info *fs_info, u64 transid)
 			goto out;  /* nothing committing|committed */
 	}
 
+	btrfs_might_wait_for_state(fs_info, 3);
 	wait_for_commit(cur_trans, TRANS_STATE_COMPLETED);
 	btrfs_put_transaction(cur_trans);
 out:
@@ -1966,6 +1968,7 @@ void btrfs_commit_transaction_async(struct btrfs_trans_handle *trans)
 	 * Wait for the current transaction commit to start and block
 	 * subsequent transaction joins
 	 */
+	btrfs_might_wait_for_state(fs_info, 0);
 	wait_event(fs_info->transaction_blocked_wait,
 		   cur_trans->state >= TRANS_STATE_COMMIT_START ||
 		   TRANS_ABORTED(cur_trans));
@@ -2123,13 +2126,16 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 	ktime_t interval;
 
 	ASSERT(refcount_read(&trans->use_count) == 1);
+	rwsem_acquire_read(&fs_info->btrfs_state_change_map[0], 0, 0, _THIS_IP_);
 
 	/* Stop the commit early if ->aborted is set */
 	if (TRANS_ABORTED(cur_trans)) {
 		ret = cur_trans->aborted;
+		rwsem_release(&fs_info->btrfs_state_change_map[0], _THIS_IP_);
 		btrfs_end_transaction(trans);
 		return ret;
 	}
+
 
 	btrfs_trans_release_metadata(trans);
 	trans->block_rsv = NULL;
@@ -2146,6 +2152,7 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 		 */
 		ret = btrfs_run_delayed_refs(trans, 0);
 		if (ret) {
+			rwsem_release(&fs_info->btrfs_state_change_map[0], _THIS_IP_);
 			btrfs_end_transaction(trans);
 			return ret;
 		}
@@ -2178,6 +2185,7 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 		if (run_it) {
 			ret = btrfs_start_dirty_block_groups(trans);
 			if (ret) {
+				rwsem_release(&fs_info->btrfs_state_change_map[0], _THIS_IP_);
 				btrfs_end_transaction(trans);
 				return ret;
 			}
@@ -2195,7 +2203,15 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 
 		if (trans->in_fsync)
 			want_state = TRANS_STATE_SUPER_COMMITTED;
+
+		rwsem_release(&fs_info->btrfs_state_change_map[0], _THIS_IP_);
 		ret = btrfs_end_transaction(trans);
+
+		if (want_state == TRANS_STATE_COMPLETED)
+			btrfs_might_wait_for_state(fs_info, 3);
+		else
+			btrfs_might_wait_for_state(fs_info, 2);
+
 		wait_for_commit(cur_trans, want_state);
 
 		if (TRANS_ABORTED(cur_trans))
@@ -2208,6 +2224,7 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 
 	cur_trans->state = TRANS_STATE_COMMIT_START;
 	wake_up(&fs_info->transaction_blocked_wait);
+	rwsem_release(&fs_info->btrfs_state_change_map[0], _THIS_IP_);
 
 	if (cur_trans->list.prev != &fs_info->trans_list) {
 		enum btrfs_trans_state want_state = TRANS_STATE_COMPLETED;
@@ -2221,6 +2238,10 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 			refcount_inc(&prev_trans->use_count);
 			spin_unlock(&fs_info->trans_lock);
 
+			if (want_state == TRANS_STATE_COMPLETED)
+				btrfs_might_wait_for_state(fs_info, 3);
+			else
+				btrfs_might_wait_for_state(fs_info, 2);
 			wait_for_commit(prev_trans, want_state);
 
 			ret = READ_ONCE(prev_trans->aborted);
@@ -2317,9 +2338,14 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 	 * as a writer.
 	 */
 
+	btrfs_lockdep_release(fs_info, btrfs_trans_num_writers);
 	btrfs_might_wait_for_event(fs_info, btrfs_trans_num_writers);
 	wait_event(cur_trans->writer_wait,
 		   atomic_read(&cur_trans->num_writers) == 1);
+
+	rwsem_acquire_read(&fs_info->btrfs_state_change_map[3], 0, 0, _THIS_IP_);
+	rwsem_acquire_read(&fs_info->btrfs_state_change_map[2], 0, 0, _THIS_IP_);
+	rwsem_acquire_read(&fs_info->btrfs_state_change_map[1], 0, 0, _THIS_IP_);
 
 	/*
 	 * We've started the commit, clear the flag in case we were triggered to
@@ -2330,6 +2356,7 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 
 	if (TRANS_ABORTED(cur_trans)) {
 		ret = cur_trans->aborted;
+		rwsem_release(&fs_info->btrfs_state_change_map[1], _THIS_IP_);
 		goto scrub_continue;
 	}
 	/*
@@ -2464,6 +2491,7 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 	mutex_unlock(&fs_info->reloc_mutex);
 
 	wake_up(&fs_info->transaction_wait);
+	rwsem_release(&fs_info->btrfs_state_change_map[1], _THIS_IP_);
 
 	ret = btrfs_write_and_wait_transaction(trans);
 	if (ret) {
@@ -2495,6 +2523,7 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 	 */
 	cur_trans->state = TRANS_STATE_SUPER_COMMITTED;
 	wake_up(&cur_trans->commit_wait);
+	rwsem_release(&fs_info->btrfs_state_change_map[2], _THIS_IP_);
 
 	btrfs_finish_extent_commit(trans);
 
@@ -2508,10 +2537,12 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 	 */
 	cur_trans->state = TRANS_STATE_COMPLETED;
 	wake_up(&cur_trans->commit_wait);
+	rwsem_release(&fs_info->btrfs_state_change_map[3], _THIS_IP_);
 
 	spin_lock(&fs_info->trans_lock);
 	list_del_init(&cur_trans->list);
 	spin_unlock(&fs_info->trans_lock);
+
 
 	btrfs_put_transaction(cur_trans);
 	btrfs_put_transaction(cur_trans);
@@ -2536,7 +2567,10 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 
 unlock_reloc:
 	mutex_unlock(&fs_info->reloc_mutex);
+	rwsem_release(&fs_info->btrfs_state_change_map[1], _THIS_IP_);
 scrub_continue:
+	rwsem_release(&fs_info->btrfs_state_change_map[2], _THIS_IP_);
+	rwsem_release(&fs_info->btrfs_state_change_map[3], _THIS_IP_);
 	btrfs_scrub_continue(fs_info);
 cleanup_transaction:
 	btrfs_trans_release_metadata(trans);
