@@ -3213,6 +3213,7 @@ int btrfs_finish_ordered_io(struct btrfs_ordered_extent *ordered_extent)
 	bool clear_reserved_extent = true;
 	unsigned int clear_bits = EXTENT_DEFRAG;
 
+	btrfs_lockdep_acquire(fs_info, btrfs_ordered_extent);
 	start = ordered_extent->file_offset;
 	end = start + ordered_extent->num_bytes - 1;
 
@@ -8976,12 +8977,14 @@ void btrfs_destroy_inode(struct inode *vfs_inode)
 
 	while (1) {
 		ordered = btrfs_lookup_first_ordered_extent(inode, (u64)-1);
-		if (!ordered)
+		if (!ordered){
 			break;
+		}
 		else {
 			btrfs_err(root->fs_info,
 				  "found ordered extent %llu %llu on inode cleanup",
 				  ordered->file_offset, ordered->num_bytes);
+			btrfs_lockdep_acquire(root->fs_info, btrfs_ordered_extent);
 			btrfs_remove_ordered_extent(inode, ordered);
 			btrfs_put_ordered_extent(ordered);
 			btrfs_put_ordered_extent(ordered);

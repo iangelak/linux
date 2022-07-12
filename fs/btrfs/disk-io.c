@@ -3038,6 +3038,7 @@ void btrfs_init_fs_info(struct btrfs_fs_info *fs_info)
 	static struct lock_class_key btrfs_trans_unblocked_key;
 	static struct lock_class_key btrfs_trans_sup_committed_key;
 	static struct lock_class_key btrfs_trans_completed_key;
+	static struct lock_class_key btrfs_ordered_extent_key;
 
 	xa_init_flags(&fs_info->fs_roots, GFP_ATOMIC);
 	xa_init_flags(&fs_info->extent_buffers, GFP_ATOMIC);
@@ -3089,6 +3090,9 @@ void btrfs_init_fs_info(struct btrfs_fs_info *fs_info)
 	lockdep_init_map(&fs_info->btrfs_state_change_map[3],
 					 "btrfs_trans_completed",
 					 &btrfs_trans_completed_key, 0);
+	lockdep_init_map(&fs_info->btrfs_ordered_extent_map,
+					 "btrfs_ordered_extent",
+					 &btrfs_ordered_extent_key, 0);
 
 	INIT_LIST_HEAD(&fs_info->dirty_cowonly_roots);
 	INIT_LIST_HEAD(&fs_info->space_info);
