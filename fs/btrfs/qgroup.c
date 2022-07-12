@@ -1143,6 +1143,10 @@ out_add_root:
 	}
 
 	mutex_unlock(&fs_info->qgroup_ioctl_lock);
+	spin_lock(&fs_info->qgroup_lock);
+	fs_info->quota_root = quota_root;
+	set_bit(BTRFS_FS_QUOTA_ENABLED, &fs_info->flags);
+	spin_unlock(&fs_info->qgroup_lock);
 	/*
 	 * Commit the transaction while not holding qgroup_ioctl_lock, to avoid
 	 * a deadlock with tasks concurrently doing other qgroup operations, such
@@ -1163,10 +1167,6 @@ out_add_root:
 	 * deadlocks on fs_info->qgroup_ioctl_lock with concurrent snapshot
 	 * creation.
 	 */
-	spin_lock(&fs_info->qgroup_lock);
-	fs_info->quota_root = quota_root;
-	set_bit(BTRFS_FS_QUOTA_ENABLED, &fs_info->flags);
-	spin_unlock(&fs_info->qgroup_lock);
 
 	ret = qgroup_rescan_init(fs_info, 0, 1);
 	if (!ret) {
@@ -2832,7 +2832,7 @@ int btrfs_qgroup_inherit(struct btrfs_trans_handle *trans, u64 srcid,
 		committing = true;
 	spin_unlock(&fs_info->trans_lock);
 
-	if (!committing)
+	// if (!committing)
 		mutex_lock(&fs_info->qgroup_ioctl_lock);
 	if (!test_bit(BTRFS_FS_QUOTA_ENABLED, &fs_info->flags))
 		goto out;
@@ -3010,7 +3010,7 @@ unlock:
 	if (!ret)
 		ret = btrfs_sysfs_add_one_qgroup(fs_info, dstgroup);
 out:
-	if (!committing)
+	// if (!committing)
 		mutex_unlock(&fs_info->qgroup_ioctl_lock);
 	if (need_rescan)
 		fs_info->qgroup_flags |= BTRFS_QGROUP_STATUS_FLAG_INCONSISTENT;
