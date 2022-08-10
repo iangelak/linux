@@ -1510,7 +1510,7 @@ int btrfs_check_nocow_lock(struct btrfs_inode *inode, loff_t pos,
 		*write_bytes = min_t(size_t, *write_bytes ,
 				     num_bytes - pos + lockstart);
 	}
-	unlock_extent(&inode->io_tree, lockstart, lockend);
+	unlock_extent_lockdep(&inode->io_tree, lockstart, lockend);
 
 	return ret;
 }
@@ -3517,8 +3517,8 @@ static long btrfs_fallocate(struct file *file, int mode,
 	}
 
 	locked_end = alloc_end - 1;
-	lock_extent_bits(&BTRFS_I(inode)->io_tree, alloc_start, locked_end,
-			 &cached_state);
+	lock_extent_bits_lockdep(&BTRFS_I(inode)->io_tree, alloc_start, locked_end,
+				 &cached_state, false);
 
 	btrfs_assert_inode_range_clean(BTRFS_I(inode), alloc_start, locked_end);
 
@@ -3607,8 +3607,8 @@ static long btrfs_fallocate(struct file *file, int mode,
 	 */
 	ret = btrfs_fallocate_update_isize(inode, actual_end, mode);
 out_unlock:
-	unlock_extent_cached(&BTRFS_I(inode)->io_tree, alloc_start, locked_end,
-			     &cached_state);
+	unlock_extent_cached_lockdep(&BTRFS_I(inode)->io_tree, alloc_start,
+				     locked_end, &cached_state);
 out:
 	btrfs_inode_unlock(inode, BTRFS_ILOCK_MMAP);
 	extent_changeset_free(data_reserved);

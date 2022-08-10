@@ -891,6 +891,24 @@ out:
 
 }
 
+int __clear_extent_bit_lockdep(struct extent_io_tree *tree, u64 start, u64 end,
+			       u32 bits, int wake, int delete,
+			       struct extent_state **cached_state,
+			       gfp_t mask, struct extent_changeset *changeset)
+{
+	int ret;
+
+	ret = __clear_extent_bit(tree, start, end, bits, wake, delete, cached_state,
+				 mask, changeset);
+
+	if ((tree->owner != IO_TREE_FREE_SPACE_INODE_IO) &&
+	    (tree->owner == IO_TREE_INODE_IO))
+		btrfs_lockdep_release(tree->fs_info, btrfs_inode_extent_lock);
+
+	return ret;
+}
+
+
 static void wait_on_state(struct extent_io_tree *tree,
 			  struct extent_state *state)
 		__releases(tree->lock)
@@ -1470,6 +1488,14 @@ int clear_extent_bit(struct extent_io_tree *tree, u64 start, u64 end,
 				  cached, GFP_NOFS, NULL);
 }
 
+int clear_extent_bit_lockdep(struct extent_io_tree *tree, u64 start, u64 end,
+			     u32 bits, int wake, int delete,
+			     struct extent_state **cached)
+{
+	return __clear_extent_bit_lockdep(tree, start, end, bits, wake, delete,
+					  cached, GFP_NOFS, NULL);
+}
+
 int clear_record_extent_bits(struct extent_io_tree *tree, u64 start, u64 end,
 		u32 bits, struct extent_changeset *changeset)
 {
@@ -1504,6 +1530,43 @@ int lock_extent_bits(struct extent_io_tree *tree, u64 start, u64 end,
 			break;
 		WARN_ON(start > end);
 	}
+
+	return err;
+}
+
+int lock_extent_bits_lockdep(struct extent_io_tree *tree, u64 start, u64 end,
+			     struct extent_state **cached_state, bool nested)
+{
+	int err;
+#ifdef CONFIG_LOCKDEP
+	int subclass = 1;
+#endif
+
+	/* The wait event occurs within lock_extent_bits() */
+	if ((tree->owner != IO_TREE_FREE_SPACE_INODE_IO) &&
+	    (tree->owner == IO_TREE_INODE_IO)) {
+		if (nested)
+			btrfs_might_wait_for_event_nested(tree->fs_info,
+							  btrfs_inode_extent_lock,
+							  subclass);
+		else
+			btrfs_might_wait_for_event(tree->fs_info,
+						   btrfs_inode_extent_lock);
+	}
+
+	err = lock_extent_bits(tree, start, end, cached_state);
+
+	if ((tree->owner != IO_TREE_FREE_SPACE_INODE_IO) &&
+	    (tree->owner == IO_TREE_INODE_IO)) {
+		if (nested)
+			btrfs_lockdep_acquire_nested(tree->fs_info,
+						     btrfs_inode_extent_lock,
+						     subclass);
+		else
+			btrfs_lockdep_acquire(tree->fs_info,
+					      btrfs_inode_extent_lock);
+	}
+
 	return err;
 }
 
@@ -2094,14 +2157,15 @@ again:
 	}
 
 	/* step three, lock the state bits for the whole range */
-	lock_extent_bits(tree, delalloc_start, delalloc_end, &cached_state);
+	lock_extent_bits_lockdep(tree, delalloc_start, delalloc_end, &cached_state,
+				 true);
 
 	/* then test to make sure it is all still delalloc */
 	ret = test_range_bit(tree, delalloc_start, delalloc_end,
 			     EXTENT_DELALLOC, 1, cached_state);
 	if (!ret) {
-		unlock_extent_cached(tree, delalloc_start, delalloc_end,
-				     &cached_state);
+		unlock_extent_cached_lockdep(tree, delalloc_start, delalloc_end,
+					     &cached_state);
 		__unlock_for_delalloc(inode, locked_page,
 			      delalloc_start, delalloc_end);
 		cond_resched();
@@ -3774,6 +3838,20 @@ int btrfs_read_folio(struct file *file, struct folio *folio)
 	 * bio to do the cleanup.
 	 */
 	submit_one_bio(&bio_ctrl);
+
+	/*
+	 * Release the lockdep map here because
+	 * btrfs_lock_and_flush_ordered_range() will exit with the lockdep map
+	 * acquired as a reader. Actually bio worker would unlock the extent bits
+	 * and thus the lockdep map when it ran asynchronously, if extent bits were
+	 * annotated in a generic way. However, lockdep expects that the
+	 * acquisition and release of the lockdep map occur in the same context,
+	 * thus we have to unlock the lockdep map here.
+	 */
+	if ((inode->io_tree.owner != IO_TREE_FREE_SPACE_INODE_IO) &&
+	    (inode->io_tree.owner == IO_TREE_INODE_IO))
+		btrfs_lockdep_release(inode->io_tree.fs_info,
+				      btrfs_inode_extent_lock);
 	return ret;
 }
 
@@ -3793,6 +3871,18 @@ static inline void contiguous_readpages(struct page *pages[], int nr_pages,
 				  REQ_RAHEAD, prev_em_start);
 		put_page(pages[index]);
 	}
+
+	/*
+	 * Release the lockdep map here because
+	 * btrfs_lock_and_flush_ordered_range() will exit with the lockdep map
+	 * acquired as a reader. We have to unlock here because
+	 * contiguous_readpages() will be called in while loop by
+	 * extent_readahead(), thus lockdep would complain about double locking.
+	 */
+	if ((inode->io_tree.owner != IO_TREE_FREE_SPACE_INODE_IO) &&
+	    (inode->io_tree.owner == IO_TREE_INODE_IO))
+		btrfs_lockdep_release(inode->io_tree.fs_info,
+				      btrfs_inode_extent_lock);
 }
 
 /*
@@ -3829,6 +3919,16 @@ static noinline_for_stack int writepage_delalloc(struct btrfs_inode *inode,
 		}
 		ret = btrfs_run_delalloc_range(inode, page, delalloc_start,
 				delalloc_end, &page_started, &nr_written, wbc);
+
+		/*
+		 * Release the lockdep map here, because btrfs_run_delalloc_range()
+		 * will exit with the lockdep map acquired.
+		 */
+		if ((inode->io_tree.owner != IO_TREE_FREE_SPACE_INODE_IO) &&
+		    (inode->io_tree.owner == IO_TREE_INODE_IO))
+			btrfs_lockdep_release(inode->io_tree.fs_info,
+					      btrfs_inode_extent_lock);
+
 		if (ret) {
 			btrfs_page_set_error(inode->root->fs_info, page,
 					     page_offset(page), PAGE_SIZE);
@@ -5584,8 +5684,8 @@ int extent_fiemap(struct btrfs_inode *inode, struct fiemap_extent_info *fieinfo,
 		last_for_get_extent = isize;
 	}
 
-	lock_extent_bits(&inode->io_tree, start, start + len - 1,
-			 &cached_state);
+	lock_extent_bits_lockdep(&inode->io_tree, start, start + len - 1,
+				 &cached_state, false);
 
 	em = get_extent_skip_holes(inode, start, last_for_get_extent);
 	if (!em)
@@ -5697,8 +5797,8 @@ out_free:
 		ret = emit_last_fiemap_cache(fieinfo, &cache);
 	free_extent_map(em);
 out:
-	unlock_extent_cached(&inode->io_tree, start, start + len - 1,
-			     &cached_state);
+	unlock_extent_cached_lockdep(&inode->io_tree, start, start + len - 1,
+				     &cached_state);
 
 out_free_ulist:
 	btrfs_free_path(path);

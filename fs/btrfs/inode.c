@@ -3214,6 +3214,7 @@ int btrfs_finish_ordered_io(struct btrfs_ordered_extent *ordered_extent)
 	bool freespace_inode;
 	bool truncated = false;
 	bool clear_reserved_extent = true;
+	bool have_locked = false;
 	unsigned int clear_bits = EXTENT_DEFRAG;
 
 	start = ordered_extent->file_offset;
@@ -3272,7 +3273,12 @@ int btrfs_finish_ordered_io(struct btrfs_ordered_extent *ordered_extent)
 	}
 
 	clear_bits |= EXTENT_LOCKED;
-	lock_extent_bits(io_tree, start, end, &cached_state);
+	lock_extent_bits_lockdep(io_tree, start, end, &cached_state, true);
+	/*
+	 * We need this helper boolean because we can jump to out tag without
+	 * having acquired the lockdep map first and unlock it
+	 */
+	have_locked = true;
 
 	if (freespace_inode)
 		trans = btrfs_join_transaction_spacecache(root);
@@ -3338,9 +3344,14 @@ int btrfs_finish_ordered_io(struct btrfs_ordered_extent *ordered_extent)
 	}
 	ret = 0;
 out:
-	clear_extent_bit(&inode->io_tree, start, end, clear_bits,
-			 (clear_bits & EXTENT_LOCKED) ? 1 : 0, 0,
-			 &cached_state);
+	if (have_locked)
+		clear_extent_bit_lockdep(&inode->io_tree, start, end, clear_bits,
+					 (clear_bits & EXTENT_LOCKED) ? 1 : 0, 0,
+					 &cached_state);
+	else
+		clear_extent_bit(&inode->io_tree, start, end, clear_bits,
+				(clear_bits & EXTENT_LOCKED) ? 1 : 0, 0,
+				&cached_state);
 
 	if (trans)
 		btrfs_end_transaction(trans);
@@ -5139,7 +5150,8 @@ next:
 			break;
 	}
 	free_extent_map(em);
-	unlock_extent_cached(io_tree, hole_start, block_end - 1, &cached_state);
+	unlock_extent_cached_lockdep(io_tree, hole_start, block_end - 1,
+				     &cached_state);
 	return err;
 }
 
