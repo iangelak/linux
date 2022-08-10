@@ -702,7 +702,10 @@ static void flush_space(struct btrfs_fs_info *fs_info,
 			ret = PTR_ERR(trans);
 			break;
 		}
+		btrfs_lockdep_acquire_nested(fs_info, btrfs_reservation_space,
+					     BTRFS_LOCKDEP_FLUSH_DELAYED_ITEMS);
 		ret = btrfs_run_delayed_items_nr(trans, nr);
+		btrfs_lockdep_release(fs_info, btrfs_reservation_space);
 		btrfs_end_transaction(trans);
 		break;
 	case FLUSH_DELALLOC:
@@ -710,8 +713,11 @@ static void flush_space(struct btrfs_fs_info *fs_info,
 	case FLUSH_DELALLOC_FULL:
 		if (state == FLUSH_DELALLOC_FULL)
 			num_bytes = U64_MAX;
+		btrfs_lockdep_acquire_nested(fs_info, btrfs_reservation_space,
+					     BTRFS_LOCKDEP_FLUSH_DELALLOC_FULL);
 		shrink_delalloc(fs_info, space_info, num_bytes,
 				state != FLUSH_DELALLOC, for_preempt);
+		btrfs_lockdep_release(fs_info, btrfs_reservation_space);
 		break;
 	case FLUSH_DELAYED_REFS_NR:
 	case FLUSH_DELAYED_REFS:
@@ -720,11 +726,14 @@ static void flush_space(struct btrfs_fs_info *fs_info,
 			ret = PTR_ERR(trans);
 			break;
 		}
+		btrfs_lockdep_acquire_nested(fs_info, btrfs_reservation_space,
+					     BTRFS_LOCKDEP_FLUSH_DELAYED_REFS);
 		if (state == FLUSH_DELAYED_REFS_NR)
 			nr = calc_reclaim_items_nr(fs_info, num_bytes);
 		else
 			nr = 0;
 		btrfs_run_delayed_refs(trans, nr);
+		btrfs_lockdep_release(fs_info, btrfs_reservation_space);
 		btrfs_end_transaction(trans);
 		break;
 	case ALLOC_CHUNK:
@@ -746,10 +755,13 @@ static void flush_space(struct btrfs_fs_info *fs_info,
 			ret = PTR_ERR(trans);
 			break;
 		}
+		btrfs_lockdep_acquire_nested(fs_info, btrfs_reservation_space,
+					     BTRFS_LOCKDEP_ALLOC_CHUNK_FORCE);
 		ret = btrfs_chunk_alloc(trans,
 				btrfs_get_alloc_profile(fs_info, space_info->flags),
 				(state == ALLOC_CHUNK) ? CHUNK_ALLOC_NO_FORCE :
 					CHUNK_ALLOC_FORCE);
+		btrfs_lockdep_release(fs_info, btrfs_reservation_space);
 		btrfs_end_transaction(trans);
 
 		/*
@@ -777,8 +789,11 @@ static void flush_space(struct btrfs_fs_info *fs_info,
 		 * bunch of pinned space, so make sure we run the iputs before
 		 * we do our pinned bytes check below.
 		 */
+		btrfs_lockdep_acquire_nested(fs_info, btrfs_reservation_space,
+					     BTRFS_LOCKDEP_RUN_DELAYED_IPUTS);
 		btrfs_run_delayed_iputs(fs_info);
 		btrfs_wait_on_delayed_iputs(fs_info);
+		btrfs_lockdep_release(fs_info, btrfs_reservation_space);
 		break;
 	case COMMIT_TRANS:
 		ASSERT(current->journal_info == NULL);
@@ -1443,6 +1458,16 @@ static void wait_reserve_ticket(struct btrfs_fs_info *fs_info,
 {
 	DEFINE_WAIT(wait);
 	int ret = 0;
+
+#ifdef CONFIG_LOCKDEP
+	int state = BTRFS_LOCKDEP_FLUSH_DELAYED_ITEMS;
+
+	while (state <= BTRFS_LOCKDEP_RUN_DELAYED_IPUTS) {
+		btrfs_might_wait_for_event_nested(fs_info, btrfs_reservation_space,
+						  state);
+		state++;
+	}
+#endif
 
 	spin_lock(&space_info->lock);
 	while (ticket->bytes > 0 && ticket->error == 0) {

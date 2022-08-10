@@ -1105,6 +1105,7 @@ struct btrfs_fs_info {
 	struct lockdep_map btrfs_trans_pending_ordered_map;
 	struct lockdep_map btrfs_ordered_extent_map;
 	struct lockdep_map btrfs_inode_extent_lock_map;
+	struct lockdep_map btrfs_reservation_space_map;
 
 #ifdef CONFIG_BTRFS_FS_REF_VERIFY
 	spinlock_t ref_verify_lock;
@@ -1193,6 +1194,14 @@ enum btrfs_lockdep_trans_states {
 	BTRFS_LOCKDEP_TRANS_UNBLOCKED,
 	BTRFS_LOCKDEP_TRANS_SUPER_COMMITTED,
 	BTRFS_LOCKDEP_TRANS_COMPLETED,
+};
+
+enum btrfs_reservation_space_states {
+	BTRFS_LOCKDEP_FLUSH_DELAYED_ITEMS,
+	BTRFS_LOCKDEP_FLUSH_DELALLOC_FULL,
+	BTRFS_LOCKDEP_FLUSH_DELAYED_REFS,
+	BTRFS_LOCKDEP_ALLOC_CHUNK_FORCE,
+	BTRFS_LOCKDEP_RUN_DELAYED_IPUTS,
 };
 
 /*
