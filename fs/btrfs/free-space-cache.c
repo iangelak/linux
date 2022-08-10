@@ -130,6 +130,7 @@ struct inode *lookup_free_space_inode(struct btrfs_block_group *block_group,
 		block_group->inode = igrab(inode);
 	spin_unlock(&block_group->lock);
 
+	BTRFS_I(inode)->io_tree.owner = IO_TREE_FREE_SPACE_INODE_IO;
 	return inode;
 }
 

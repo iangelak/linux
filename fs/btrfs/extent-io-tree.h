@@ -56,6 +56,7 @@ enum {
 	IO_TREE_FS_EXCLUDED_EXTENTS,
 	IO_TREE_BTREE_INODE_IO,
 	IO_TREE_INODE_IO,
+	IO_TREE_FREE_SPACE_INODE_IO,
 	IO_TREE_INODE_IO_FAILURE,
 	IO_TREE_RELOC_BLOCKS,
 	IO_TREE_TRANS_DIRTY_PAGES,
@@ -107,9 +108,18 @@ void extent_io_tree_release(struct extent_io_tree *tree);
 int lock_extent_bits(struct extent_io_tree *tree, u64 start, u64 end,
 		     struct extent_state **cached);
 
+int lock_extent_bits_lockdep(struct extent_io_tree *tree, u64 start, u64 end,
+			     struct extent_state **cached, bool nested);
+
 static inline int lock_extent(struct extent_io_tree *tree, u64 start, u64 end)
 {
 	return lock_extent_bits(tree, start, end, NULL);
+}
+
+static inline int lock_extent_lockdep(struct extent_io_tree *tree, u64 start,
+				      u64 end, bool nested)
+{
+	return lock_extent_bits_lockdep(tree, start, end, NULL, nested);
 }
 
 int try_lock_extent(struct extent_io_tree *tree, u64 start, u64 end);
@@ -134,9 +144,24 @@ int __clear_extent_bit(struct extent_io_tree *tree, u64 start, u64 end,
 		     struct extent_state **cached, gfp_t mask,
 		     struct extent_changeset *changeset);
 
+int clear_extent_bit_lockdep(struct extent_io_tree *tree, u64 start, u64 end,
+			     u32 bits, int wake, int delete,
+			     struct extent_state **cached);
+int __clear_extent_bit_lockdep(struct extent_io_tree *tree, u64 start, u64 end,
+			     u32 bits, int wake, int delete,
+			     struct extent_state **cached, gfp_t mask,
+			     struct extent_changeset *changeset);
+
 static inline int unlock_extent(struct extent_io_tree *tree, u64 start, u64 end)
 {
 	return clear_extent_bit(tree, start, end, EXTENT_LOCKED, 1, 0, NULL);
+}
+
+static inline int unlock_extent_lockdep(struct extent_io_tree *tree, u64 start,
+					u64 end)
+{
+	return clear_extent_bit_lockdep(tree, start, end, EXTENT_LOCKED, 1, 0,
+					NULL);
 }
 
 static inline int unlock_extent_cached(struct extent_io_tree *tree, u64 start,
@@ -144,6 +169,13 @@ static inline int unlock_extent_cached(struct extent_io_tree *tree, u64 start,
 {
 	return __clear_extent_bit(tree, start, end, EXTENT_LOCKED, 1, 0, cached,
 				GFP_NOFS, NULL);
+}
+
+static inline int unlock_extent_cached_lockdep(struct extent_io_tree *tree,
+		u64 start, u64 end, struct extent_state **cached)
+{
+	return __clear_extent_bit_lockdep(tree, start, end, EXTENT_LOCKED, 1, 0,
+				cached, GFP_NOFS, NULL);
 }
 
 static inline int unlock_extent_cached_atomic(struct extent_io_tree *tree,
