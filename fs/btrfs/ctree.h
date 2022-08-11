@@ -1212,6 +1212,16 @@ enum btrfs_lockdep_trans_states {
 	} while (0)
 
 /*
+ * Same as the btrfs_wait_for_event() macro but used for multilevel lockdep
+ * annotations.
+ */
+#define btrfs_might_wait_for_event_nested(owner, lock, subclass)		\
+	do {									\
+		rwsem_acquire(&owner->lock##_map, subclass, 0, _THIS_IP_);	\
+		rwsem_release(&owner->lock##_map, _THIS_IP_);			\
+	} while (0)
+
+/*
  * Protection for the resource/condition of a wait event.
  *
  * @owner:  The struct where the lockdep map is defined
@@ -1224,6 +1234,13 @@ enum btrfs_lockdep_trans_states {
  */
 #define btrfs_lockdep_acquire(owner, lock)					\
 	rwsem_acquire_read(&owner->lock##_map, 0, 0, _THIS_IP_)
+
+/*
+ * Same as the btrfs_lockdep_acquire() macro but used for multilevel lockdep
+ * annotations.
+ */
+#define btrfs_lockdep_acquire_nested(owner, lock, subclass)			\
+	rwsem_acquire_read(&owner->lock##_map, subclass, 0, _THIS_IP_)
 
 /*
  * Used after signaling the condition for a wait event to release the lockdep
